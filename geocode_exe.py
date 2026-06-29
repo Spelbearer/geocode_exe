@@ -281,6 +281,41 @@ def process_coordinates(
     return result
 
 
+class RoundedField(tk.Frame):
+    """Контейнер с мягкой скруглённой обводкой для полей выбора."""
+
+    def __init__(self, parent: tk.Widget, *, active: bool = False) -> None:
+        super().__init__(parent, bg="#222846", highlightthickness=0, bd=0)
+        self._active = active
+        self._canvas = tk.Canvas(self, height=42, bg="#222846", highlightthickness=0, bd=0)
+        self._canvas.pack(fill="both", expand=True)
+        self.content = tk.Frame(self._canvas, bg="#222846", bd=0, highlightthickness=0)
+        self._window = self._canvas.create_window(6, 6, anchor="nw", window=self.content)
+        self._canvas.bind("<Configure>", self._redraw)
+
+    def set_active(self, active: bool) -> None:
+        self._active = active
+        self._redraw()
+
+    def _redraw(self, _event: tk.Event | None = None) -> None:
+        width = max(self._canvas.winfo_width(), 1)
+        height = max(self._canvas.winfo_height(), 42)
+        border = "#f02fb3" if self._active else "#4b5275"
+        self._canvas.delete("border")
+        self._round_rect(2, 2, width - 2, height - 2, radius=14, fill=border, tags="border")
+        self._round_rect(5, 5, width - 5, height - 5, radius=11, fill="#f3f4f6", tags="border")
+        self._canvas.coords(self._window, 8, 8)
+        self._canvas.itemconfigure(self._window, width=max(width - 16, 1), height=max(height - 16, 1))
+
+    def _round_rect(self, x1: int, y1: int, x2: int, y2: int, *, radius: int, **kwargs: Any) -> None:
+        points = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        self._canvas.create_polygon(points, smooth=True, **kwargs)
+
+
 class GeocodeApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -328,6 +363,8 @@ class GeocodeApp(tk.Tk):
         style.configure("Card.TFrame", background=card, relief="flat")
         style.configure("FieldWrap.TFrame", background=card)
         style.configure("ActiveFieldWrap.TFrame", background=accent)
+        style.configure("Status.TFrame", background="#1d2340", relief="flat")
+        style.configure("Status.TLabel", background="#1d2340", foreground="#dbeafe", font=("Segoe UI", 9, "bold"))
         style.configure("TLabel", background=base, foreground="#eef2ff", font=("Segoe UI", 10))
         style.configure("Card.TLabel", background=card, foreground="#f8fafc", font=("Segoe UI", 10, "bold"))
         style.configure("Muted.TLabel", foreground="#b8bfd9", background=card)
@@ -349,7 +386,7 @@ class GeocodeApp(tk.Tk):
         style.map("TCombobox", fieldbackground=[("disabled", "#313650"), ("readonly", field)], foreground=[("disabled", "#8c93ae"), ("readonly", "#121827")])
         style.configure("Treeview", rowheight=28, font=("Segoe UI", 9), background="#202540", fieldbackground="#202540", foreground="#eef2ff", borderwidth=0)
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background="#2d3457", foreground="#ffffff")
-        style.configure("Horizontal.TProgressbar", troughcolor="#2d3457", background=cyan, bordercolor="#2d3457", lightcolor=cyan, darkcolor=cyan)
+        style.configure("Horizontal.TProgressbar", troughcolor="#111827", background=accent, bordercolor="#1d2340", lightcolor="#ff5ac8", darkcolor=accent)
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self, padding=20)
@@ -399,19 +436,19 @@ class GeocodeApp(tk.Tk):
         ttk.Radiobutton(settings, text="Координаты → адрес", variable=self.mode, value="coords_to_address", command=self._refresh_controls).grid(row=0, column=1, sticky="w", padx=20)
 
         ttk.Label(settings, text="Колонка адреса", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        self.address_wrap = ttk.Frame(settings, style="ActiveFieldWrap.TFrame", padding=3)
+        self.address_wrap = RoundedField(settings, active=True)
         self.address_wrap.grid(row=2, column=0, sticky="we", pady=(2, 0))
-        self.address_combo = ttk.Combobox(self.address_wrap, textvariable=self.address_column, state="readonly", width=32)
+        self.address_combo = ttk.Combobox(self.address_wrap.content, textvariable=self.address_column, state="readonly", width=32)
         self.address_combo.pack(fill="x", expand=True)
         ttk.Label(settings, text="Широта", style="Card.TLabel").grid(row=1, column=1, sticky="w", pady=(10, 0))
-        self.lat_wrap = ttk.Frame(settings, style="FieldWrap.TFrame", padding=3)
+        self.lat_wrap = RoundedField(settings)
         self.lat_wrap.grid(row=2, column=1, sticky="we", pady=(2, 0), padx=(20, 0))
-        self.lat_combo = ttk.Combobox(self.lat_wrap, textvariable=self.lat_column, state="readonly", width=24)
+        self.lat_combo = ttk.Combobox(self.lat_wrap.content, textvariable=self.lat_column, state="readonly", width=24)
         self.lat_combo.pack(fill="x", expand=True)
         ttk.Label(settings, text="Долгота", style="Card.TLabel").grid(row=1, column=2, sticky="w", pady=(10, 0))
-        self.lon_wrap = ttk.Frame(settings, style="FieldWrap.TFrame", padding=3)
+        self.lon_wrap = RoundedField(settings)
         self.lon_wrap.grid(row=2, column=2, sticky="we", pady=(2, 0), padx=(20, 0))
-        self.lon_combo = ttk.Combobox(self.lon_wrap, textvariable=self.lon_column, state="readonly", width=24)
+        self.lon_combo = ttk.Combobox(self.lon_wrap.content, textvariable=self.lon_column, state="readonly", width=24)
         self.lon_combo.pack(fill="x", expand=True)
         settings.columnconfigure(0, weight=2)
         settings.columnconfigure(1, weight=1)
@@ -421,10 +458,13 @@ class GeocodeApp(tk.Tk):
         action_row.pack(fill="x", pady=(0, 8))
         self.start_button = ttk.Button(action_row, text="Запустить обработку", command=self.start_processing, style="Accent.TButton")
         self.start_button.pack(side="left")
-        ttk.Button(action_row, text="Сохранить результат", command=self.save_result).pack(side="left", padx=(8, 0))
-        self.progress = ttk.Progressbar(action_row, mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True, padx=12)
-        ttk.Label(action_row, textvariable=self.status).pack(side="left")
+        status_panel = ttk.Frame(action_row, style="Status.TFrame", padding=(12, 8))
+        status_panel.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self.progress_label = ttk.Label(status_panel, text="0%", style="Status.TLabel", width=5, anchor="center")
+        self.progress_label.pack(side="right", padx=(10, 0))
+        ttk.Label(status_panel, textvariable=self.status, style="Status.TLabel").pack(side="top", anchor="w", fill="x")
+        self.progress = ttk.Progressbar(status_panel, mode="determinate", style="Horizontal.TProgressbar")
+        self.progress.pack(side="top", fill="x", expand=True, pady=(6, 0))
 
         table_frame = self._make_section(root, "Предпросмотр", padding=6, fill="both", expand=True)
         self.preview = ttk.Treeview(table_frame, show="headings")
@@ -514,8 +554,14 @@ class GeocodeApp(tk.Tk):
         if self.mode.get() == "coords_to_address" and (not self.lat_column.get() or not self.lon_column.get()):
             messagebox.showwarning("Нет колонок", "Выберите колонки широты и долготы.")
             return
+        if not self.output_file.get().strip():
+            self.choose_output_file()
+        if not self.output_file.get().strip():
+            messagebox.showwarning("Нет пути сохранения", "Выберите путь для автоматического сохранения результата.")
+            return
 
         self.start_button.config(state="disabled")
+        self.progress_label.configure(text="0%")
         self.progress.configure(maximum=max(len(self.table_data.rows), 1), value=0)
         self.status.set("Обработка...")
         threading.Thread(target=self._process_in_thread, daemon=True).start()
@@ -566,16 +612,29 @@ class GeocodeApp(tk.Tk):
             if event == "progress":
                 current, total, label = payload
                 self.progress.configure(maximum=total, value=current)
-                self.status.set(f"{current}/{total}: {label}")
+                percent = int(current / max(total, 1) * 100)
+                self.progress_label.configure(text=f"{percent}%")
+                self.status.set(f"Обработка {current}/{total}: {label}")
             elif event == "error":
                 self.start_button.config(state="normal")
+                self.progress_label.configure(text="Ошибка")
                 messagebox.showerror("Ошибка обработки", str(payload))
                 self.status.set("Обработка остановлена")
             elif event == "done":
                 self.start_button.config(state="normal")
                 self.result_data = payload
                 self._show_preview(self.result_data)
-                self.status.set(f"Готово. Обработано строк: {len(self.result_data.rows)}")
+                output_path = self.output_file.get().strip()
+                try:
+                    write_table(self.result_data, output_path)
+                except Exception as exc:
+                    self.progress_label.configure(text="Ошибка")
+                    messagebox.showerror("Ошибка сохранения", str(exc))
+                    self.status.set("Обработка завершена, но файл не сохранён")
+                else:
+                    self.progress.configure(value=self.progress.cget("maximum"))
+                    self.progress_label.configure(text="100%")
+                    self.status.set(f"Готово. Файл сохранён: {output_path}")
         self.after(150, self._poll_worker_events)
 
     def _fill_columns(self) -> None:
@@ -605,9 +664,9 @@ class GeocodeApp(tk.Tk):
         self.address_combo.configure(state="readonly" if address_mode else "disabled")
         self.lat_combo.configure(state="readonly" if not address_mode else "disabled")
         self.lon_combo.configure(state="readonly" if not address_mode else "disabled")
-        self.address_wrap.configure(style="ActiveFieldWrap.TFrame" if address_mode else "FieldWrap.TFrame")
-        self.lat_wrap.configure(style="FieldWrap.TFrame" if address_mode else "ActiveFieldWrap.TFrame")
-        self.lon_wrap.configure(style="FieldWrap.TFrame" if address_mode else "ActiveFieldWrap.TFrame")
+        self.address_wrap.set_active(address_mode)
+        self.lat_wrap.set_active(not address_mode)
+        self.lon_wrap.set_active(not address_mode)
 
     def _show_preview(self, table: TableData) -> None:
         columns = table.headers
