@@ -494,11 +494,11 @@ class CheckColumnDropdown(ttk.Frame):
         self.entry.bind("<Button-1>", self._on_dropdown_click)
         self.bind("<Button-1>", self._on_dropdown_click)
 
-    def set_columns(self, columns: list[str]) -> None:
+    def set_columns(self, columns: list[str], *, enabled: bool = True) -> None:
         self.columns = columns[:]
         self.column_vars = {column: tk.BooleanVar(value=True) for column in self.columns}
         self.all_var.set(True)
-        self._set_enabled(bool(self.columns))
+        self._set_enabled(enabled and bool(self.columns))
         self._refresh_text()
         if self.popup is not None and self.popup.winfo_exists():
             self._rebuild_popup()
@@ -610,7 +610,7 @@ class CheckColumnDropdown(ttk.Frame):
     def _refresh_text(self) -> None:
         total = len(self.columns)
         if not total:
-            self.textvariable.set("Загрузите файл")
+            self.textvariable.set("Загрузите XLSX файл")
             return
         selected = total if self.all_var.get() else len(self.selected_columns())
         self.textvariable.set(f"Выбрано {selected} из {total}")
@@ -679,6 +679,7 @@ class GeocodeApp(tk.Tk):
         style.configure("Tool.TButton", foreground="#ffffff", background="#4a4f66", padding=(12, 8), relief="flat")
         style.configure("DropdownArrow.TButton", foreground="#ffffff", background="#4a4f66", padding=(2, 0), relief="flat")
         style.configure("TEntry", fieldbackground=field, foreground="#121827", bordercolor="#4b5275", lightcolor=cyan, darkcolor="#4b5275", padding=7, relief="flat")
+        style.map("TEntry", fieldbackground=[("disabled", "#d1d5db"), ("readonly", field)], foreground=[("disabled", "#6b7280"), ("readonly", "#121827")])
         style.configure("TSpinbox", fieldbackground=field, foreground="#121827", arrowsize=12)
         style.configure("TCheckbutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.configure("Dropdown.TCheckbutton", background=field, foreground="#121827", font=("Segoe UI", 9))
@@ -958,7 +959,8 @@ class GeocodeApp(tk.Tk):
         columns = self.table_data.headers
         for combo in (self.address_combo, self.lat_combo, self.lon_combo):
             combo.configure(values=columns)
-        self.columns_dropdown.set_columns(columns)
+        xlsx_columns_enabled = bool(self.loaded_path and self.loaded_path.suffix.lower() == ".xlsx")
+        self.columns_dropdown.set_columns(columns, enabled=xlsx_columns_enabled)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
