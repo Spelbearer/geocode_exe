@@ -127,39 +127,79 @@ class GeocodingClient:
         return parsed
 
 
-def read_table(path: str | Path) -> TableData:
+def read_table(
+    path: str | Path,
+    *,
+    sheet_name: str = "",
+    delimiter: str | None = None,
+    encoding: str = "utf-8-sig",
+    has_header: bool = True,
+    start_row: int = 1,
+) -> TableData:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
-        return read_excel(file_path)
+        return read_excel(file_path, sheet_name=sheet_name, has_header=has_header, start_row=start_row)
     if suffix in {".csv", ".txt"}:
-        return read_delimited(file_path)
+        return read_delimited(file_path, delimiter=delimiter, encoding=encoding, has_header=has_header, start_row=start_row)
     raise ValueError(f"Неподдерживаемый формат файла: {suffix}")
 
 
-def read_delimited(path: Path) -> TableData:
-    raw = path.read_text(encoding="utf-8-sig", errors="replace")
-    sample = raw[:4096]
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel_tab if path.suffix.lower() == ".txt" else csv.excel
-    rows = list(csv.DictReader(raw.splitlines(), dialect=dialect))
-    headers = list(rows[0].keys()) if rows else []
+def read_delimited(
+    path: Path,
+    *,
+    delimiter: str | None = None,
+    encoding: str = "utf-8-sig",
+    has_header: bool = True,
+    start_row: int = 1,
+) -> TableData:
+    raw = path.read_text(encoding=encoding, errors="replace")
+    lines = raw.splitlines()[max(start_row - 1, 0) :]
+    if not lines:
+        return TableData(headers=[], rows=[])
+    if delimiter:
+        reader = csv.reader(lines, delimiter=delimiter)
+    else:
+        sample = "\n".join(lines[:25])
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel_tab if path.suffix.lower() == ".txt" else csv.excel
+        reader = csv.reader(lines, dialect=dialect)
+    values = list(reader)
+    if not values:
+        return TableData(headers=[], rows=[])
+    if has_header:
+        headers = [str(value or "") for value in values[0]]
+        data_rows = values[1:]
+    else:
+        width = max(len(row) for row in values)
+        headers = [f"Столбец {index}" for index in range(1, width + 1)]
+        data_rows = values
+    rows = []
+    for source_row in data_rows:
+        row = {header: source_row[index] if index < len(source_row) else "" for index, header in enumerate(headers)}
+        rows.append(row)
     return TableData(headers=headers, rows=rows)
 
 
-def read_excel(path: Path) -> TableData:
+def read_excel(path: Path, *, sheet_name: str = "", has_header: bool = True, start_row: int = 1) -> TableData:
     if openpyxl is None:
         raise ValueError("Для Excel нужен пакет openpyxl. Для EXE он должен быть установлен перед сборкой.")
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook.active
-    values = list(sheet.iter_rows(values_only=True))
+    sheet = workbook[sheet_name] if sheet_name and sheet_name in workbook.sheetnames else workbook.active
+    values = list(sheet.iter_rows(values_only=True))[max(start_row - 1, 0) :]
     if not values:
         return TableData(headers=[], rows=[])
-    headers = [str(value or "") for value in values[0]]
+    if has_header:
+        headers = [str(value or "") for value in values[0]]
+        data_rows = values[1:]
+    else:
+        width = max(len(row) for row in values)
+        headers = [f"Столбец {index}" for index in range(1, width + 1)]
+        data_rows = values
     rows = []
-    for source_row in values[1:]:
+    for source_row in data_rows:
         row = {header: source_row[index] if index < len(source_row) else "" for index, header in enumerate(headers)}
         rows.append(row)
     return TableData(headers=headers, rows=rows)
@@ -258,6 +298,14 @@ class GeocodeApp(tk.Tk):
         self.address_column = tk.StringVar()
         self.lat_column = tk.StringVar()
         self.lon_column = tk.StringVar()
+        self.source_file = tk.StringVar()
+        self.output_file = tk.StringVar()
+        self.sheet_name = tk.StringVar()
+        self.work_columns = tk.StringVar(value="Выберите столбцы...")
+        self.delimiter = tk.StringVar(value=";")
+        self.has_header = tk.BooleanVar(value=True)
+        self.start_row = tk.IntVar(value=1)
+        self.encoding = tk.StringVar(value="utf-8-sig")
         self.status = tk.StringVar(value="Загрузите Excel, CSV или TXT файл")
 
         self._configure_style()
@@ -265,57 +313,98 @@ class GeocodeApp(tk.Tk):
         self.after(150, self._poll_worker_events)
 
     def _configure_style(self) -> None:
-        self.configure(bg="#eef3f9")
+        self.configure(bg="#171a2e")
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TFrame", background="#eef3f9")
-        style.configure("Card.TFrame", background="#ffffff", relief="flat")
-        style.configure("TLabel", background="#eef3f9", foreground="#1f2937", font=("Segoe UI", 10))
-        style.configure("Muted.TLabel", foreground="#6b7280", background="#ffffff")
-        style.configure("Title.TLabel", background="#eef3f9", foreground="#111827", font=("Segoe UI", 18, "bold"))
-        style.configure("Subtitle.TLabel", background="#eef3f9", foreground="#64748b", font=("Segoe UI", 10))
-        style.configure("TLabelframe", background="#eef3f9", bordercolor="#d7dee9", relief="solid")
-        style.configure("TLabelframe.Label", background="#eef3f9", foreground="#334155", font=("Segoe UI", 10, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10), padding=(14, 8))
-        style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"), foreground="#ffffff", background="#2563eb")
-        style.map("Accent.TButton", background=[("active", "#1d4ed8"), ("disabled", "#93c5fd")])
-        style.configure("TCombobox", padding=6)
-        style.configure("Treeview", rowheight=28, font=("Segoe UI", 9), background="#ffffff", fieldbackground="#ffffff")
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background="#e8eef7", foreground="#334155")
-        style.configure("Horizontal.TProgressbar", troughcolor="#dbe4f0", background="#2563eb")
+        base = "#171a2e"
+        card = "#222846"
+        field = "#f3f4f6"
+        accent = "#f02fb3"
+        cyan = "#38d6e8"
+        style.configure("TFrame", background=base)
+        style.configure("Card.TFrame", background=card, relief="flat")
+        style.configure("TLabel", background=base, foreground="#eef2ff", font=("Segoe UI", 10))
+        style.configure("Card.TLabel", background=card, foreground="#f8fafc", font=("Segoe UI", 10, "bold"))
+        style.configure("Muted.TLabel", foreground="#b8bfd9", background=card)
+        style.configure("Title.TLabel", background=base, foreground="#ffffff", font=("Segoe UI", 22, "bold"))
+        style.configure("Subtitle.TLabel", background=base, foreground="#aab4d6", font=("Segoe UI", 10))
+        style.configure("TLabelframe", background=card, bordercolor="#343b62", relief="solid")
+        style.configure("TLabelframe.Label", background=base, foreground="#ffffff", font=("Segoe UI", 10, "bold"))
+        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=(14, 8), background="#343b62", foreground="#ffffff", borderwidth=0)
+        style.map("TButton", background=[("active", "#4a527f"), ("disabled", "#2d334f")])
+        style.configure("Accent.TButton", foreground="#ffffff", background=accent)
+        style.map("Accent.TButton", background=[("active", "#ff5ac8"), ("disabled", "#6f3a64")])
+        style.configure("Tool.TButton", foreground="#ffffff", background="#4a4f66", padding=(10, 6))
+        style.configure("TEntry", fieldbackground=field, foreground="#121827", bordercolor="#4b5275", lightcolor=cyan, darkcolor="#4b5275", padding=5)
+        style.configure("TSpinbox", fieldbackground=field, foreground="#121827", arrowsize=12)
+        style.configure("TCheckbutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.configure("TRadiobutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.configure("TCombobox", padding=5, fieldbackground=field, foreground="#121827", arrowcolor="#4b5275")
+        style.configure("Treeview", rowheight=28, font=("Segoe UI", 9), background="#202540", fieldbackground="#202540", foreground="#eef2ff", borderwidth=0)
+        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background="#2d3457", foreground="#ffffff")
+        style.configure("Horizontal.TProgressbar", troughcolor="#2d3457", background=cyan, bordercolor="#2d3457", lightcolor=cyan, darkcolor=cyan)
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=18)
+        root = ttk.Frame(self, padding=20)
         root.pack(fill="both", expand=True)
 
-        ttk.Label(root, text="Геокодирование файлов", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(root, text="Загрузите таблицу, выберите колонки и получите аккуратный файл с результатом.", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 14))
+        hero = tk.Canvas(root, height=88, highlightthickness=0, bg="#171a2e")
+        hero.pack(fill="x", pady=(0, 12))
+        hero.create_arc(-80, 16, 330, 180, start=10, extent=120, outline="#38d6e8", width=3, style="arc")
+        hero.create_arc(650, -90, 1160, 160, start=190, extent=130, outline="#f02fb3", width=4, style="arc")
+        hero.create_text(8, 26, anchor="w", text="Геокодирование файлов", fill="#ffffff", font=("Segoe UI", 22, "bold"))
+        hero.create_text(10, 58, anchor="w", text="Настройте входной файл, выберите колонки и сохраните результат.", fill="#aab4d6", font=("Segoe UI", 10))
 
-        file_row = ttk.Frame(root, style="Card.TFrame", padding=12)
-        file_row.pack(fill="x")
-        ttk.Button(file_row, text="Открыть файл", command=self.open_file, style="Accent.TButton").pack(side="left")
-        ttk.Button(file_row, text="Сохранить результат", command=self.save_result).pack(side="left", padx=(8, 0))
-        self.file_label = ttk.Label(file_row, text="Файл не выбран", style="Muted.TLabel")
-        self.file_label.pack(side="left", padx=12)
+        io = ttk.LabelFrame(root, text="Исходный файл/Настройка вывода", padding=10)
+        io.pack(fill="x")
+        io.columnconfigure(1, weight=1)
+        io.columnconfigure(4, weight=1)
+
+        ttk.Label(io, text="Исходный файл (txt, csv, excel):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(io, textvariable=self.source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        ttk.Button(io, text="Выбрать", command=self.open_file, style="Tool.TButton").grid(row=0, column=5, sticky="ew", pady=4)
+
+        ttk.Label(io, text="Выходной файл:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(io, textvariable=self.output_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        ttk.Button(io, text="Выбрать", command=self.choose_output_file, style="Tool.TButton").grid(row=1, column=5, sticky="ew", pady=4)
+
+        ttk.Label(io, text="Лист Excel:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        self.sheet_combo = ttk.Combobox(io, textvariable=self.sheet_name, state="readonly", values=[])
+        self.sheet_combo.grid(row=2, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
+        self.sheet_combo.bind("<<ComboboxSelected>>", lambda _event: self.reload_file())
+
+        ttk.Label(io, text="Столбцы для работы:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        self.columns_combo = ttk.Combobox(io, textvariable=self.work_columns, state="readonly", values=[])
+        self.columns_combo.grid(row=3, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
+        self.columns_combo.bind("<<ComboboxSelected>>", self._select_work_column)
+
+        ttk.Label(io, text="Разделитель:", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Entry(io, textvariable=self.delimiter, width=4).grid(row=4, column=1, sticky="w", padx=(6, 6), pady=4)
+        ttk.Checkbutton(io, text="Наличие заголовка", variable=self.has_header, command=self.reload_file).grid(row=4, column=2, sticky="w", pady=4)
+        ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=4, column=3, sticky="e", padx=(12, 6), pady=4)
+        ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=6, command=self.reload_file).grid(row=4, column=4, sticky="w", pady=4)
+
+        ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Radiobutton(io, text="UTF-8", variable=self.encoding, value="utf-8-sig", command=self.reload_file).grid(row=5, column=1, sticky="w", padx=(6, 0), pady=4)
+        ttk.Radiobutton(io, text="CP1251", variable=self.encoding, value="cp1251", command=self.reload_file).grid(row=5, column=2, sticky="w", pady=4)
 
         settings = ttk.LabelFrame(root, text="Настройки обработки", padding=14)
         settings.pack(fill="x", pady=12)
         ttk.Radiobutton(settings, text="Адрес → координаты", variable=self.mode, value="address_to_coords", command=self._refresh_controls).grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(settings, text="Координаты → адрес", variable=self.mode, value="coords_to_address", command=self._refresh_controls).grid(row=0, column=1, sticky="w", padx=20)
 
-        ttk.Label(settings, text="Колонка адреса").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(settings, text="Колонка адреса", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 0))
         self.address_combo = ttk.Combobox(settings, textvariable=self.address_column, state="readonly", width=32)
         self.address_combo.grid(row=2, column=0, sticky="we", pady=(2, 0))
-        ttk.Label(settings, text="Широта").grid(row=1, column=1, sticky="w", pady=(10, 0))
+        ttk.Label(settings, text="Широта", style="Card.TLabel").grid(row=1, column=1, sticky="w", pady=(10, 0))
         self.lat_combo = ttk.Combobox(settings, textvariable=self.lat_column, state="readonly", width=24)
         self.lat_combo.grid(row=2, column=1, sticky="we", pady=(2, 0), padx=(20, 0))
-        ttk.Label(settings, text="Долгота").grid(row=1, column=2, sticky="w", pady=(10, 0))
+        ttk.Label(settings, text="Долгота", style="Card.TLabel").grid(row=1, column=2, sticky="w", pady=(10, 0))
         self.lon_combo = ttk.Combobox(settings, textvariable=self.lon_column, state="readonly", width=24)
         self.lon_combo.grid(row=2, column=2, sticky="we", pady=(2, 0), padx=(20, 0))
-
         settings.columnconfigure(0, weight=2)
         settings.columnconfigure(1, weight=1)
         settings.columnconfigure(2, weight=1)
@@ -324,6 +413,7 @@ class GeocodeApp(tk.Tk):
         action_row.pack(fill="x", pady=(0, 8))
         self.start_button = ttk.Button(action_row, text="Запустить обработку", command=self.start_processing, style="Accent.TButton")
         self.start_button.pack(side="left")
+        ttk.Button(action_row, text="Сохранить результат", command=self.save_result).pack(side="left", padx=(8, 0))
         self.progress = ttk.Progressbar(action_row, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True, padx=12)
         ttk.Label(action_row, textvariable=self.status).pack(side="left")
@@ -345,17 +435,57 @@ class GeocodeApp(tk.Tk):
         filename = filedialog.askopenfilename(filetypes=FILE_TYPES)
         if not filename:
             return
+        self.source_file.set(filename)
+        source_path = Path(filename)
+        if not self.output_file.get():
+            self.output_file.set(str(source_path.with_name(f"{source_path.stem}_result.xlsx")))
+        self._load_sheet_names(source_path)
+        self.reload_file()
+
+    def choose_output_file(self) -> None:
+        initial_name = "result.xlsx"
+        if self.loaded_path:
+            initial_name = f"{self.loaded_path.stem}_result.xlsx"
+        filename = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile=initial_name, filetypes=FILE_TYPES)
+        if filename:
+            self.output_file.set(filename)
+
+    def reload_file(self) -> None:
+        filename = self.source_file.get().strip()
+        if not filename:
+            return
         try:
-            self.table_data = read_table(filename)
+            self.table_data = read_table(
+                filename,
+                sheet_name=self.sheet_name.get(),
+                delimiter=self.delimiter.get() or None,
+                encoding=self.encoding.get(),
+                has_header=self.has_header.get(),
+                start_row=max(int(self.start_row.get()), 1),
+            )
         except Exception as exc:
             messagebox.showerror("Ошибка открытия файла", str(exc))
             return
         self.result_data = None
         self.loaded_path = Path(filename)
-        self.file_label.config(text=str(self.loaded_path))
         self.status.set(f"Загружено строк: {len(self.table_data.rows)}")
         self._fill_columns()
         self._show_preview(self.table_data)
+
+    def _load_sheet_names(self, source_path: Path) -> None:
+        if source_path.suffix.lower() not in {".xlsx", ".xlsm"} or openpyxl is None:
+            self.sheet_combo.configure(values=[])
+            self.sheet_name.set("")
+            return
+        try:
+            workbook = openpyxl.load_workbook(source_path, read_only=True, data_only=True)
+        except Exception:
+            self.sheet_combo.configure(values=[])
+            self.sheet_name.set("")
+            return
+        self.sheet_combo.configure(values=workbook.sheetnames)
+        if workbook.sheetnames and self.sheet_name.get() not in workbook.sheetnames:
+            self.sheet_name.set(workbook.sheetnames[0])
 
     def start_processing(self) -> None:
         if self.table_data is None:
@@ -377,10 +507,10 @@ class GeocodeApp(tk.Tk):
         if self.result_data is None:
             messagebox.showwarning("Нет результата", "Сначала выполните обработку.")
             return
-        initial_name = "result.xlsx"
-        if self.loaded_path:
-            initial_name = f"{self.loaded_path.stem}_result.xlsx"
-        filename = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile=initial_name, filetypes=FILE_TYPES)
+        filename = self.output_file.get().strip()
+        if not filename:
+            self.choose_output_file()
+            filename = self.output_file.get().strip()
         if not filename:
             return
         try:
@@ -435,12 +565,23 @@ class GeocodeApp(tk.Tk):
         if self.table_data is None:
             return
         columns = self.table_data.headers
-        for combo in (self.address_combo, self.lat_combo, self.lon_combo):
+        for combo in (self.address_combo, self.lat_combo, self.lon_combo, self.columns_combo):
             combo.configure(values=columns)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
+        self.work_columns.set(", ".join(column for column in [self.address_column.get(), self.lat_column.get(), self.lon_column.get()] if column) or "Выберите столбцы...")
         self._refresh_controls()
+
+    def _select_work_column(self, _event: tk.Event | None = None) -> None:
+        selected = self.work_columns.get()
+        if self.mode.get() == "address_to_coords":
+            self.address_column.set(selected)
+        elif not self.lat_column.get():
+            self.lat_column.set(selected)
+        else:
+            self.lon_column.set(selected)
+        self.work_columns.set(", ".join(column for column in [self.address_column.get(), self.lat_column.get(), self.lon_column.get()] if column))
 
     def _refresh_controls(self) -> None:
         address_mode = self.mode.get() == "address_to_coords"
