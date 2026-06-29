@@ -483,16 +483,19 @@ class CheckColumnDropdown(ttk.Frame):
         self.columns: list[str] = []
         self.column_vars: dict[str, tk.BooleanVar] = {}
         self.all_var = tk.BooleanVar(value=True)
-        self.popup: tk.Toplevel | None = None
         self._updating = False
         self._enabled = False
 
-        self.entry = ttk.Entry(self, textvariable=self.textvariable, state="disabled", cursor="hand2")
-        self.entry.pack(side="left", fill="x", expand=True)
-        self.button = ttk.Button(self, text="▼", width=2, command=self.toggle_popup, style="DropdownArrow.TButton", state="disabled")
-        self.button.pack(side="right", fill="y")
-        self.entry.bind("<Button-1>", self._on_dropdown_click)
-        self.bind("<Button-1>", self._on_dropdown_click)
+        self.menu = tk.Menu(self, tearoff=False, bg="#f3f4f6", fg="#121827", activebackground="#e5e7eb", activeforeground="#121827")
+        self.dropdown = ttk.Menubutton(
+            self,
+            textvariable=self.textvariable,
+            menu=self.menu,
+            direction="below",
+            style="ColumnDropdown.TMenubutton",
+            state="disabled",
+        )
+        self.dropdown.pack(fill="x", expand=True)
 
     def set_columns(self, columns: list[str], *, enabled: bool = True) -> None:
         self.columns = columns[:]
@@ -500,101 +503,35 @@ class CheckColumnDropdown(ttk.Frame):
         self.all_var.set(True)
         self._set_enabled(enabled and bool(self.columns))
         self._refresh_text()
-        if self.popup is not None and self.popup.winfo_exists():
-            self._rebuild_popup()
+        self._rebuild_menu()
 
     def _set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
-        self.entry.configure(state="readonly" if enabled else "disabled")
-        self.button.configure(state="normal" if enabled else "disabled")
-        if not enabled:
-            self._close_popup()
-
-    def _on_dropdown_click(self, _event: tk.Event) -> str:
-        self.toggle_popup()
-        return "break"
+        self.dropdown.configure(state="normal" if enabled else "disabled")
 
     def selected_columns(self) -> list[str]:
         if self.all_var.get():
             return self.columns[:]
         return [column for column in self.columns if self.column_vars[column].get()]
 
-    def toggle_popup(self) -> None:
-        if not self._enabled:
-            return
-        if self.popup is not None and self.popup.winfo_exists():
-            self._close_popup()
-            return
-        self.popup = tk.Toplevel(self)
-        self.popup.overrideredirect(True)
-        self.popup.transient(self.winfo_toplevel())
-        self.popup.configure(bg="#f3f4f6", padx=2, pady=2)
-        self._rebuild_popup()
-        self._position_popup()
-        self.popup.bind("<Escape>", lambda _event: self._close_popup())
-        self.popup.bind("<FocusOut>", self._on_popup_focus_out)
-        self.popup.after_idle(self.popup.focus_force)
-
-    def _rebuild_popup(self) -> None:
-        if self.popup is None:
-            return
-        for child in self.popup.winfo_children():
-            child.destroy()
-        all_check = ttk.Checkbutton(self.popup, text="Выбрать все", variable=self.all_var, command=self._on_all_changed, style="Dropdown.TCheckbutton")
-        all_check.pack(anchor="w", fill="x")
+    def _rebuild_menu(self) -> None:
+        self.menu.delete(0, "end")
+        self.menu.add_checkbutton(label="Выбрать все", variable=self.all_var, command=self._on_all_changed)
+        if self.columns:
+            self.menu.add_separator()
         for column in self.columns:
-            check = ttk.Checkbutton(
-                self.popup,
-                text=column,
-                variable=self.column_vars[column],
-                command=self._on_column_changed,
-                style="Dropdown.TCheckbutton",
-            )
-            check.pack(anchor="w", fill="x")
-
-    def _position_popup(self) -> None:
-        if self.popup is None:
-            return
-        self.popup.update_idletasks()
-        width = max(self.winfo_width(), 260)
-        height = self.popup.winfo_reqheight()
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height()
-        self.popup.geometry(f"{width}x{height}{x:+d}{y:+d}")
-
-    def _on_popup_focus_out(self, _event: tk.Event) -> None:
-        if self.popup is None:
-            return
-        self.after_idle(self._close_popup_if_unfocused)
-
-    def _close_popup_if_unfocused(self) -> None:
-        if self.popup is None or not self.popup.winfo_exists():
-            return
-        focused = self.focus_get()
-        if focused is None or not str(focused).startswith(str(self.popup)):
-            self._close_popup()
-
-    def _close_popup(self) -> None:
-        if self.popup is not None and self.popup.winfo_exists():
-            self.popup.destroy()
-        self.popup = None
+            self.menu.add_checkbutton(label=column, variable=self.column_vars[column], command=self._on_column_changed)
 
     def _on_all_changed(self) -> None:
         if self._updating:
             return
         self._updating = True
         try:
-            if self.all_var.get():
-                for variable in self.column_vars.values():
-                    variable.set(True)
-            elif self.columns:
-                for variable in self.column_vars.values():
-                    variable.set(False)
+            for variable in self.column_vars.values():
+                variable.set(self.all_var.get())
         finally:
             self._updating = False
         self._refresh_text()
-        self._rebuild_popup()
-        self._position_popup()
         if self.command:
             self.command()
 
@@ -614,7 +551,6 @@ class CheckColumnDropdown(ttk.Frame):
             return
         selected = total if self.all_var.get() else len(self.selected_columns())
         self.textvariable.set(f"Выбрано {selected} из {total}")
-
 
 class GeocodeApp(tk.Tk):
     def __init__(self) -> None:
@@ -678,6 +614,8 @@ class GeocodeApp(tk.Tk):
         style.map("Accent.TButton", background=[("active", "#ff5ac8"), ("disabled", "#6f3a64")])
         style.configure("Tool.TButton", foreground="#ffffff", background="#4a4f66", padding=(12, 8), relief="flat")
         style.configure("DropdownArrow.TButton", foreground="#ffffff", background="#4a4f66", padding=(2, 0), relief="flat")
+        style.configure("ColumnDropdown.TMenubutton", padding=7, background=field, foreground="#121827", arrowcolor="#4b5275", relief="flat")
+        style.map("ColumnDropdown.TMenubutton", background=[("disabled", "#d1d5db"), ("active", "#e5e7eb")], foreground=[("disabled", "#6b7280")])
         style.configure("TEntry", fieldbackground=field, foreground="#121827", bordercolor="#4b5275", lightcolor=cyan, darkcolor="#4b5275", padding=7, relief="flat")
         style.map("TEntry", fieldbackground=[("disabled", "#d1d5db"), ("readonly", field)], foreground=[("disabled", "#6b7280"), ("readonly", "#121827")])
         style.configure("TSpinbox", fieldbackground=field, foreground="#121827", arrowsize=12)
