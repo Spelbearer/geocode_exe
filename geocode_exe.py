@@ -485,20 +485,34 @@ class CheckColumnDropdown(ttk.Frame):
         self.all_var = tk.BooleanVar(value=True)
         self.popup: tk.Toplevel | None = None
         self._updating = False
+        self._enabled = False
 
-        self.entry = ttk.Entry(self, textvariable=self.textvariable, state="readonly")
+        self.entry = ttk.Entry(self, textvariable=self.textvariable, state="disabled", cursor="hand2")
         self.entry.pack(side="left", fill="x", expand=True)
-        self.button = ttk.Button(self, text="▼", width=2, command=self.toggle_popup, style="DropdownArrow.TButton")
+        self.button = ttk.Button(self, text="▼", width=2, command=self.toggle_popup, style="DropdownArrow.TButton", state="disabled")
         self.button.pack(side="right", fill="y")
-        self.entry.bind("<Button-1>", lambda _event: self.toggle_popup())
+        self.entry.bind("<Button-1>", self._on_dropdown_click)
+        self.bind("<Button-1>", self._on_dropdown_click)
 
     def set_columns(self, columns: list[str]) -> None:
         self.columns = columns[:]
         self.column_vars = {column: tk.BooleanVar(value=True) for column in self.columns}
         self.all_var.set(True)
+        self._set_enabled(bool(self.columns))
         self._refresh_text()
         if self.popup is not None and self.popup.winfo_exists():
             self._rebuild_popup()
+
+    def _set_enabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+        self.entry.configure(state="readonly" if enabled else "disabled")
+        self.button.configure(state="normal" if enabled else "disabled")
+        if not enabled:
+            self._close_popup()
+
+    def _on_dropdown_click(self, _event: tk.Event) -> str:
+        self.toggle_popup()
+        return "break"
 
     def selected_columns(self) -> list[str]:
         if self.all_var.get():
@@ -506,9 +520,10 @@ class CheckColumnDropdown(ttk.Frame):
         return [column for column in self.columns if self.column_vars[column].get()]
 
     def toggle_popup(self) -> None:
+        if not self._enabled:
+            return
         if self.popup is not None and self.popup.winfo_exists():
-            self.popup.destroy()
-            self.popup = None
+            self._close_popup()
             return
         self.popup = tk.Toplevel(self)
         self.popup.overrideredirect(True)
@@ -516,16 +531,9 @@ class CheckColumnDropdown(ttk.Frame):
         self.popup.configure(bg="#f3f4f6", padx=2, pady=2)
         self._rebuild_popup()
         self._position_popup()
-        self.popup.bind("<FocusOut>", self._on_popup_focus_out)
         self.popup.bind("<Escape>", lambda _event: self._close_popup())
-        self.popup.update_idletasks()
-        width = max(self.winfo_width(), 260)
-        height = self.popup.winfo_reqheight()
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height()
-        self.popup.geometry(f"{width}x{height}{x:+d}{y:+d}")
-        self.popup.bind("<FocusOut>", lambda _event: self._close_popup())
-        self.popup.focus_force()
+        self.popup.bind("<FocusOut>", self._on_popup_focus_out)
+        self.popup.after_idle(self.popup.focus_force)
 
     def _rebuild_popup(self) -> None:
         if self.popup is None:
@@ -601,6 +609,9 @@ class CheckColumnDropdown(ttk.Frame):
 
     def _refresh_text(self) -> None:
         total = len(self.columns)
+        if not total:
+            self.textvariable.set("Загрузите файл")
+            return
         selected = total if self.all_var.get() else len(self.selected_columns())
         self.textvariable.set(f"Выбрано {selected} из {total}")
 
