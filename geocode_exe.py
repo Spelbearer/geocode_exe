@@ -488,7 +488,7 @@ class CheckColumnDropdown(ttk.Frame):
 
         self.entry = ttk.Entry(self, textvariable=self.textvariable, state="readonly")
         self.entry.pack(side="left", fill="x", expand=True)
-        self.button = ttk.Button(self, text="▼", width=3, command=self.toggle_popup, style="Tool.TButton")
+        self.button = ttk.Button(self, text="▼", width=2, command=self.toggle_popup, style="DropdownArrow.TButton")
         self.button.pack(side="right", fill="y")
         self.entry.bind("<Button-1>", lambda _event: self.toggle_popup())
 
@@ -514,11 +514,14 @@ class CheckColumnDropdown(ttk.Frame):
         self.popup.overrideredirect(True)
         self.popup.transient(self.winfo_toplevel())
         self.popup.configure(bg="#f3f4f6", padx=2, pady=2)
+        self._rebuild_popup()
+        self.popup.update_idletasks()
+        width = max(self.winfo_width(), 260)
+        height = self.popup.winfo_reqheight()
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height()
-        self.popup.geometry(f"{max(self.winfo_width(), 260)}x+{x}+{y}")
+        self.popup.geometry(f"{width}x{height}{x:+d}{y:+d}")
         self.popup.bind("<FocusOut>", lambda _event: self._close_popup())
-        self._rebuild_popup()
         self.popup.focus_force()
 
     def _rebuild_popup(self) -> None:
@@ -645,6 +648,7 @@ class GeocodeApp(tk.Tk):
         style.configure("Accent.TButton", foreground="#ffffff", background=accent)
         style.map("Accent.TButton", background=[("active", "#ff5ac8"), ("disabled", "#6f3a64")])
         style.configure("Tool.TButton", foreground="#ffffff", background="#4a4f66", padding=(12, 8), relief="flat")
+        style.configure("DropdownArrow.TButton", foreground="#ffffff", background="#4a4f66", padding=(2, 0), relief="flat")
         style.configure("TEntry", fieldbackground=field, foreground="#121827", bordercolor="#4b5275", lightcolor=cyan, darkcolor="#4b5275", padding=7, relief="flat")
         style.configure("TSpinbox", fieldbackground=field, foreground="#121827", arrowsize=12)
         style.configure("TCheckbutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"))
