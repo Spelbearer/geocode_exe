@@ -515,6 +515,9 @@ class CheckColumnDropdown(ttk.Frame):
         self.popup.transient(self.winfo_toplevel())
         self.popup.configure(bg="#f3f4f6", padx=2, pady=2)
         self._rebuild_popup()
+        self._position_popup()
+        self.popup.bind("<FocusOut>", self._on_popup_focus_out)
+        self.popup.bind("<Escape>", lambda _event: self._close_popup())
         self.popup.update_idletasks()
         width = max(self.winfo_width(), 260)
         height = self.popup.winfo_reqheight()
@@ -540,8 +543,28 @@ class CheckColumnDropdown(ttk.Frame):
                 style="Dropdown.TCheckbutton",
             )
             check.pack(anchor="w", fill="x")
-            if self.all_var.get():
-                check.state(["disabled"])
+
+    def _position_popup(self) -> None:
+        if self.popup is None:
+            return
+        self.popup.update_idletasks()
+        width = max(self.winfo_width(), 260)
+        height = self.popup.winfo_reqheight()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        self.popup.geometry(f"{width}x{height}{x:+d}{y:+d}")
+
+    def _on_popup_focus_out(self, _event: tk.Event) -> None:
+        if self.popup is None:
+            return
+        self.after_idle(self._close_popup_if_unfocused)
+
+    def _close_popup_if_unfocused(self) -> None:
+        if self.popup is None or not self.popup.winfo_exists():
+            return
+        focused = self.focus_get()
+        if focused is None or not str(focused).startswith(str(self.popup)):
+            self._close_popup()
 
     def _close_popup(self) -> None:
         if self.popup is not None and self.popup.winfo_exists():
@@ -563,20 +586,15 @@ class CheckColumnDropdown(ttk.Frame):
             self._updating = False
         self._refresh_text()
         self._rebuild_popup()
+        self._position_popup()
         if self.command:
             self.command()
 
     def _on_column_changed(self) -> None:
         if self._updating:
             return
-        selected_count = len(self.selected_columns())
-        if selected_count == len(self.columns) and self.columns:
-            self.all_var.set(True)
-            for variable in self.column_vars.values():
-                variable.set(True)
-            self._rebuild_popup()
-        else:
-            self.all_var.set(False)
+        selected_count = sum(variable.get() for variable in self.column_vars.values())
+        self.all_var.set(selected_count == len(self.columns) and bool(self.columns))
         self._refresh_text()
         if self.command:
             self.command()
