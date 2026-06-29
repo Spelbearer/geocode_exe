@@ -584,8 +584,6 @@ class GeocodeApp(tk.Tk):
         self.lon_column = tk.StringVar()
         self.source_file = tk.StringVar()
         self.output_file = tk.StringVar()
-        self.sheet_name = tk.StringVar()
-        self.work_columns = tk.StringVar(value="Все")
         self.delimiter = tk.StringVar(value=";")
         self.has_header = tk.BooleanVar(value=True)
         self.start_row = tk.IntVar(value=1)
@@ -644,17 +642,38 @@ class GeocodeApp(tk.Tk):
         style.configure("Horizontal.TProgressbar", troughcolor="#111827", background=accent, bordercolor="#1d2340", lightcolor="#ff5ac8", darkcolor=accent)
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=20)
-        root.pack(fill="both", expand=True)
+        scroll_canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg="#171a2e")
+        main_scrollbar = ttk.Scrollbar(self, orient="vertical", command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=main_scrollbar.set)
+        main_scrollbar.pack(side="right", fill="y")
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        root = ttk.Frame(scroll_canvas, padding=20)
+        root_window = scroll_canvas.create_window((0, 0), window=root, anchor="nw")
+
+        def update_scroll_region(_event: tk.Event | None = None) -> None:
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+
+        def update_root_width(event: tk.Event) -> None:
+            scroll_canvas.itemconfigure(root_window, width=event.width)
+
+        def on_mousewheel(event: tk.Event) -> None:
+            scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        root.bind("<Configure>", update_scroll_region)
+        scroll_canvas.bind("<Configure>", update_root_width)
+        scroll_canvas.bind_all("<MouseWheel>", on_mousewheel)
+        scroll_canvas.bind_all("<Button-4>", lambda _event: scroll_canvas.yview_scroll(-1, "units"))
+        scroll_canvas.bind_all("<Button-5>", lambda _event: scroll_canvas.yview_scroll(1, "units"))
 
         hero = tk.Canvas(root, height=88, highlightthickness=0, bg="#171a2e")
         hero.pack(fill="x", pady=(0, 12))
         hero.create_arc(-80, 16, 330, 180, start=10, extent=120, outline="#38d6e8", width=3, style="arc")
         hero.create_arc(650, -90, 1160, 160, start=190, extent=130, outline="#f02fb3", width=4, style="arc")
         hero.create_text(8, 26, anchor="w", text="Геокодирование файлов", fill="#ffffff", font=("Segoe UI", 22, "bold"))
-        hero.create_text(10, 58, anchor="w", text="Настройте входной файл, выберите колонки и сохраните результат.", fill="#aab4d6", font=("Segoe UI", 10))
+        hero.create_text(10, 58, anchor="w", text="Настройте входной файл, выберите режим обработки и сохраните результат.", fill="#aab4d6", font=("Segoe UI", 10))
 
-        io = self._make_section(root, "Исходный файл/Настройка вывода", fill="x")
+        io = self._make_section(root, "Исходный файл и настройка вывода", fill="x")
         io.columnconfigure(1, weight=1)
         io.columnconfigure(4, weight=1)
 
@@ -666,29 +685,20 @@ class GeocodeApp(tk.Tk):
         ttk.Entry(io, textvariable=self.output_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
         RoundedButton(io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
 
-        ttk.Label(io, text="Лист Excel:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
-        self.sheet_combo = ttk.Combobox(io, textvariable=self.sheet_name, state="readonly", values=[])
-        self.sheet_combo.grid(row=2, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
-        self.sheet_combo.bind("<<ComboboxSelected>>", lambda _event: self.reload_file())
-
-        ttk.Label(io, text="Столбцы для работы:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
-        self.columns_dropdown = CheckColumnDropdown(io, textvariable=self.work_columns, command=self._on_work_columns_changed)
-        self.columns_dropdown.grid(row=3, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
-
-        ttk.Label(io, text="Разделитель:", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(io, text="Разделитель:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
         self.delimiter_entry = ttk.Entry(io, textvariable=self.delimiter, width=4)
-        self.delimiter_entry.grid(row=4, column=1, sticky="w", padx=(6, 6), pady=4)
-        ttk.Checkbutton(io, text="Наличие заголовка", variable=self.has_header, command=self.reload_file).grid(row=4, column=2, sticky="w", pady=4)
-        ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=4, column=3, sticky="e", padx=(12, 6), pady=4)
-        ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=6, command=self.reload_file).grid(row=4, column=4, sticky="w", pady=4)
+        self.delimiter_entry.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=4)
+        ttk.Checkbutton(io, text="Наличие заголовка", variable=self.has_header, command=self.reload_file).grid(row=2, column=2, sticky="w", pady=4)
+        ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
+        ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=6, command=self.reload_file).grid(row=2, column=4, sticky="w", pady=4)
 
-        ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
         self.encoding_radios = [
             RoundedRadio(io, text="UTF-8", variable=self.encoding, value="utf-8-sig", command=self.reload_file),
             RoundedRadio(io, text="CP1251", variable=self.encoding, value="cp1251", command=self.reload_file),
         ]
-        self.encoding_radios[0].grid(row=5, column=1, sticky="w", padx=(6, 0), pady=4)
-        self.encoding_radios[1].grid(row=5, column=2, sticky="w", pady=4)
+        self.encoding_radios[0].grid(row=3, column=1, sticky="w", padx=(6, 0), pady=4)
+        self.encoding_radios[1].grid(row=3, column=2, sticky="w", pady=4)
 
         settings = self._make_section(root, "Настройки обработки", padding=14, fill="x", pady=12)
         RoundedRadio(settings, text="Адрес → координаты", variable=self.mode, value="address_to_coords", command=self._refresh_controls).grid(row=0, column=0, sticky="w")
@@ -753,7 +763,6 @@ class GeocodeApp(tk.Tk):
             return
         self.source_file.set(filename)
         source_path = Path(filename)
-        self._load_sheet_names(source_path)
         self._refresh_file_format_controls(source_path)
         self.reload_file()
 
@@ -769,7 +778,6 @@ class GeocodeApp(tk.Tk):
         try:
             self.table_data = read_table(
                 filename,
-                sheet_name=self.sheet_name.get(),
                 delimiter=self.delimiter.get() or None,
                 encoding=self.encoding.get(),
                 has_header=self.has_header.get(),
@@ -784,21 +792,6 @@ class GeocodeApp(tk.Tk):
         self.status.set(f"Загружено строк: {len(self.table_data.rows)}")
         self._fill_columns()
         self._show_preview(self.table_data)
-
-    def _load_sheet_names(self, source_path: Path) -> None:
-        if source_path.suffix.lower() not in {".xlsx", ".xlsm"} or openpyxl is None:
-            self.sheet_combo.configure(values=[])
-            self.sheet_name.set("")
-            return
-        try:
-            workbook = openpyxl.load_workbook(source_path, read_only=True, data_only=True)
-        except Exception:
-            self.sheet_combo.configure(values=[])
-            self.sheet_name.set("")
-            return
-        self.sheet_combo.configure(values=workbook.sheetnames)
-        if workbook.sheetnames and self.sheet_name.get() not in workbook.sheetnames:
-            self.sheet_name.set(workbook.sheetnames[0])
 
     def _refresh_file_format_controls(self, source_path: Path | None = None) -> None:
         path = source_path or self.loaded_path
@@ -910,22 +903,10 @@ class GeocodeApp(tk.Tk):
         columns = self.table_data.headers
         for combo in (self.address_combo, self.lat_combo, self.lon_combo):
             combo.configure(values=columns)
-        xlsx_columns_enabled = bool(self.loaded_path and self.loaded_path.suffix.lower() == ".xlsx")
-        self.columns_dropdown.set_columns(columns, enabled=xlsx_columns_enabled)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
         self._refresh_controls()
-
-    def _on_work_columns_changed(self) -> None:
-        if self.table_data is not None:
-            self._show_preview(self.table_data)
-
-    def _selected_preview_columns(self, table: TableData) -> list[str]:
-        selected = self.columns_dropdown.selected_columns()
-        visible = selected or table.headers
-        extra_columns = [column for column in table.headers if column not in self.columns_dropdown.columns]
-        return [column for column in [*visible, *extra_columns] if column in table.headers]
 
     def _refresh_controls(self) -> None:
         address_mode = self.mode.get() == "address_to_coords"
@@ -937,7 +918,7 @@ class GeocodeApp(tk.Tk):
         self.lon_wrap.set_active(not address_mode)
 
     def _show_preview(self, table: TableData) -> None:
-        columns = self._selected_preview_columns(table)
+        columns = table.headers
         self.preview.delete(*self.preview.get_children())
         self.preview.configure(columns=columns)
         for column in columns:
