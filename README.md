@@ -1,0 +1,44 @@
+# GeocodeEXE
+
+Теперь приложение собрано в один переносимый файл: `geocode_exe.py`.
+
+## Как передавать
+
+- Для разработчика/пользователя с Python: передайте только `geocode_exe.py`.
+- Для пользователя без Python: соберите один `GeocodeEXE.exe` и передайте только этот `.exe`.
+
+## Запуск одного Python-файла
+
+```bash
+python geocode_exe.py
+```
+
+CSV/TXT и запросы к API работают без сторонних Python-библиотек. Для открытия/сохранения Excel `.xlsx/.xlsm` нужен `openpyxl`:
+
+```bash
+python -m pip install openpyxl
+```
+
+## Сборка одного EXE
+
+```bash
+python -m pip install pyinstaller openpyxl
+pyinstaller --onefile --windowed --name GeocodeEXE geocode_exe.py
+```
+
+Готовый файл будет здесь:
+
+```text
+dist/GeocodeEXE.exe
+```
+
+После сборки можно передавать пользователю только `dist/GeocodeEXE.exe`; папки проекта и Python ему не нужны.
+
+## Что умеет интерфейс
+
+- Загружать `.xlsx`, `.xlsm`, `.csv`, `.txt`.
+- Определять координаты по адресу.
+- Определять адрес по координатам через endpoint из примера `address/geolocate`.
+- Показывать предпросмотр первых 200 строк.
+- Сохранять результат в Excel, CSV или TXT.
+- Менять URL API прямо в окне приложения.
