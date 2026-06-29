@@ -287,9 +287,9 @@ class RoundedField(tk.Frame):
     def __init__(self, parent: tk.Widget, *, active: bool = False) -> None:
         super().__init__(parent, bg="#222846", highlightthickness=0, bd=0)
         self._active = active
-        self._canvas = tk.Canvas(self, height=42, bg="#222846", highlightthickness=0, bd=0)
+        self._canvas = tk.Canvas(self, height=48, bg="#222846", highlightthickness=0, bd=0)
         self._canvas.pack(fill="both", expand=True)
-        self.content = tk.Frame(self._canvas, bg="#222846", bd=0, highlightthickness=0)
+        self.content = tk.Frame(self._canvas, bg="#f3f4f6", bd=0, highlightthickness=0)
         self._window = self._canvas.create_window(6, 6, anchor="nw", window=self.content)
         self._canvas.bind("<Configure>", self._redraw)
 
@@ -299,13 +299,79 @@ class RoundedField(tk.Frame):
 
     def _redraw(self, _event: tk.Event | None = None) -> None:
         width = max(self._canvas.winfo_width(), 1)
-        height = max(self._canvas.winfo_height(), 42)
+        height = max(self._canvas.winfo_height(), 48)
         border = "#f02fb3" if self._active else "#4b5275"
         self._canvas.delete("border")
         self._round_rect(2, 2, width - 2, height - 2, radius=14, fill=border, tags="border")
         self._round_rect(5, 5, width - 5, height - 5, radius=11, fill="#f3f4f6", tags="border")
         self._canvas.coords(self._window, 8, 8)
         self._canvas.itemconfigure(self._window, width=max(width - 16, 1), height=max(height - 16, 1))
+
+    def _round_rect(self, x1: int, y1: int, x2: int, y2: int, *, radius: int, **kwargs: Any) -> None:
+        points = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        self._canvas.create_polygon(points, smooth=True, **kwargs)
+
+
+class RoundedRadio(tk.Frame):
+    """Радиокнопка с закруглённой цветной подложкой выбранного состояния."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        text: str,
+        variable: tk.Variable,
+        value: str,
+        command: Callable[[], None] | None = None,
+        bg: str = "#222846",
+    ) -> None:
+        super().__init__(parent, bg=bg, highlightthickness=0, bd=0)
+        self.variable = variable
+        self.value = value
+        self.bg = bg
+        self.accent = "#f02fb3"
+        self._canvas = tk.Canvas(self, height=34, bg=bg, highlightthickness=0, bd=0)
+        self._canvas.pack(fill="both", expand=True)
+        self.button = tk.Radiobutton(
+            self._canvas,
+            text=text,
+            variable=variable,
+            value=value,
+            command=command,
+            bg=bg,
+            activebackground="#343b62",
+            fg="#ffffff",
+            activeforeground="#ffffff",
+            selectcolor="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            indicatoron=True,
+            borderwidth=0,
+            highlightthickness=0,
+            padx=8,
+            pady=4,
+        )
+        self._canvas.configure(width=self.button.winfo_reqwidth() + 16)
+        self._window = self._canvas.create_window(8, 5, anchor="nw", window=self.button)
+        self._canvas.bind("<Configure>", self._redraw)
+        self.variable.trace_add("write", lambda *_args: self._redraw())
+        self._redraw()
+
+    def _redraw(self, _event: tk.Event | None = None) -> None:
+        selected = self.variable.get() == self.value
+        width = max(self._canvas.winfo_width(), self.button.winfo_reqwidth() + 16)
+        height = max(self._canvas.winfo_height(), 34)
+        fill = self.accent if selected else self.bg
+        foreground = "#171a2e" if selected else "#ffffff"
+        active_bg = self.accent if selected else "#343b62"
+        self._canvas.delete("background")
+        self._round_rect(1, 1, width - 1, height - 1, radius=12, fill=fill, tags="background")
+        self._canvas.tag_lower("background")
+        self._canvas.itemconfigure(self._window, width=max(width - 16, 1), height=max(height - 10, 1))
+        self.button.configure(bg=fill, activebackground=active_bg, fg=foreground)
 
     def _round_rect(self, x1: int, y1: int, x2: int, y2: int, *, radius: int, **kwargs: Any) -> None:
         points = [
@@ -428,12 +494,12 @@ class GeocodeApp(tk.Tk):
         ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=6, command=self.reload_file).grid(row=4, column=4, sticky="w", pady=4)
 
         ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=4)
-        ttk.Radiobutton(io, text="UTF-8", variable=self.encoding, value="utf-8-sig", command=self.reload_file).grid(row=5, column=1, sticky="w", padx=(6, 0), pady=4)
-        ttk.Radiobutton(io, text="CP1251", variable=self.encoding, value="cp1251", command=self.reload_file).grid(row=5, column=2, sticky="w", pady=4)
+        RoundedRadio(io, text="UTF-8", variable=self.encoding, value="utf-8-sig", command=self.reload_file).grid(row=5, column=1, sticky="w", padx=(6, 0), pady=4)
+        RoundedRadio(io, text="CP1251", variable=self.encoding, value="cp1251", command=self.reload_file).grid(row=5, column=2, sticky="w", pady=4)
 
         settings = self._make_section(root, "Настройки обработки", padding=14, fill="x", pady=12)
-        ttk.Radiobutton(settings, text="Адрес → координаты", variable=self.mode, value="address_to_coords", command=self._refresh_controls).grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(settings, text="Координаты → адрес", variable=self.mode, value="coords_to_address", command=self._refresh_controls).grid(row=0, column=1, sticky="w", padx=20)
+        RoundedRadio(settings, text="Адрес → координаты", variable=self.mode, value="address_to_coords", command=self._refresh_controls).grid(row=0, column=0, sticky="w")
+        RoundedRadio(settings, text="Координаты → адрес", variable=self.mode, value="coords_to_address", command=self._refresh_controls).grid(row=0, column=1, sticky="w", padx=20)
 
         ttk.Label(settings, text="Колонка адреса", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 0))
         self.address_wrap = RoundedField(settings, active=True)
@@ -457,7 +523,7 @@ class GeocodeApp(tk.Tk):
         action_row = ttk.Frame(root)
         action_row.pack(fill="x", pady=(0, 8))
         self.start_button = ttk.Button(action_row, text="Запустить обработку", command=self.start_processing, style="Accent.TButton")
-        self.start_button.pack(side="left")
+        self.start_button.pack(side="left", fill="y")
         status_panel = ttk.Frame(action_row, style="Status.TFrame", padding=(12, 8))
         status_panel.pack(side="left", fill="x", expand=True, padx=(12, 0))
         self.progress_label = ttk.Label(status_panel, text="0%", style="Status.TLabel", width=5, anchor="center")
