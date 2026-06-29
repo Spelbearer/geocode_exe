@@ -534,6 +534,7 @@ class CheckColumnDropdown(ttk.Frame):
         self._refresh_text()
         if self.command:
             self.command()
+        self._keep_menu_open()
 
     def _on_column_changed(self) -> None:
         if self._updating:
@@ -543,6 +544,18 @@ class CheckColumnDropdown(ttk.Frame):
         self._refresh_text()
         if self.command:
             self.command()
+        self._keep_menu_open()
+
+    def _keep_menu_open(self) -> None:
+        self.after_idle(self._post_menu_below_dropdown)
+
+    def _post_menu_below_dropdown(self) -> None:
+        if not self._enabled:
+            return
+        x = self.dropdown.winfo_rootx()
+        y = self.dropdown.winfo_rooty() + self.dropdown.winfo_height()
+        self.menu.post(x, y)
+        self.menu.focus_set()
 
     def _refresh_text(self) -> None:
         total = len(self.columns)
