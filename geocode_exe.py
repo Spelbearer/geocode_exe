@@ -518,6 +518,13 @@ class CheckColumnDropdown(ttk.Frame):
         self._position_popup()
         self.popup.bind("<FocusOut>", self._on_popup_focus_out)
         self.popup.bind("<Escape>", lambda _event: self._close_popup())
+        self.popup.update_idletasks()
+        width = max(self.winfo_width(), 260)
+        height = self.popup.winfo_reqheight()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        self.popup.geometry(f"{width}x{height}{x:+d}{y:+d}")
+        self.popup.bind("<FocusOut>", lambda _event: self._close_popup())
         self.popup.focus_force()
 
     def _rebuild_popup(self) -> None:
