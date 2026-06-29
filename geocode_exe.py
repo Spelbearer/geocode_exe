@@ -398,6 +398,7 @@ class RoundedButton(tk.Frame):
         foreground: str = "#ffffff",
         padx: int = 18,
         pady: int = 10,
+        height: int = 44,
     ) -> None:
         super().__init__(parent, bg=bg, highlightthickness=0, bd=0)
         self.command = command
@@ -411,7 +412,8 @@ class RoundedButton(tk.Frame):
         self._padx = padx
         self._pady = pady
         self._min_width = len(self.text) * 9 + self._padx * 2
-        self._canvas = tk.Canvas(self, width=self._min_width, height=44, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        self._height = height
+        self._canvas = tk.Canvas(self, width=self._min_width, height=self._height, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
         self._canvas.pack(fill="both", expand=True)
         self._canvas.bind("<Configure>", self._redraw)
         self._canvas.bind("<Enter>", self._on_enter)
@@ -450,7 +452,7 @@ class RoundedButton(tk.Frame):
 
     def _redraw(self, _event: tk.Event | None = None) -> None:
         width = max(self._canvas.winfo_width(), self._min_width)
-        height = max(self._canvas.winfo_height(), 44)
+        height = max(self._canvas.winfo_height(), self._height)
         fill = self.disabled_fill if self._state == "disabled" else self.active_fill if self._hovered else self.fill
         self._canvas.delete("all")
         self._round_rect(1, 1, width - 1, height - 1, radius=14, fill=fill, outline="")
@@ -469,6 +471,117 @@ class RoundedButton(tk.Frame):
             x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
         ]
         self._canvas.create_polygon(points, smooth=True, **kwargs)
+
+
+class CheckColumnDropdown(ttk.Frame):
+    """Выпадающий список с чекбоксами для выбора рабочих столбцов."""
+
+    def __init__(self, parent: tk.Widget, textvariable: tk.StringVar, command: Callable[[], None] | None = None) -> None:
+        super().__init__(parent)
+        self.textvariable = textvariable
+        self.command = command
+        self.columns: list[str] = []
+        self.column_vars: dict[str, tk.BooleanVar] = {}
+        self.all_var = tk.BooleanVar(value=True)
+        self.popup: tk.Toplevel | None = None
+        self._updating = False
+
+        self.entry = ttk.Entry(self, textvariable=self.textvariable, state="readonly")
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.button = ttk.Button(self, text="▼", width=3, command=self.toggle_popup, style="Tool.TButton")
+        self.button.pack(side="right", fill="y")
+        self.entry.bind("<Button-1>", lambda _event: self.toggle_popup())
+
+    def set_columns(self, columns: list[str]) -> None:
+        self.columns = columns[:]
+        self.column_vars = {column: tk.BooleanVar(value=True) for column in self.columns}
+        self.all_var.set(True)
+        self._refresh_text()
+        if self.popup is not None and self.popup.winfo_exists():
+            self._rebuild_popup()
+
+    def selected_columns(self) -> list[str]:
+        if self.all_var.get():
+            return self.columns[:]
+        return [column for column in self.columns if self.column_vars[column].get()]
+
+    def toggle_popup(self) -> None:
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.destroy()
+            self.popup = None
+            return
+        self.popup = tk.Toplevel(self)
+        self.popup.overrideredirect(True)
+        self.popup.transient(self.winfo_toplevel())
+        self.popup.configure(bg="#f3f4f6", padx=2, pady=2)
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        self.popup.geometry(f"{max(self.winfo_width(), 260)}x+{x}+{y}")
+        self.popup.bind("<FocusOut>", lambda _event: self._close_popup())
+        self._rebuild_popup()
+        self.popup.focus_force()
+
+    def _rebuild_popup(self) -> None:
+        if self.popup is None:
+            return
+        for child in self.popup.winfo_children():
+            child.destroy()
+        all_check = ttk.Checkbutton(self.popup, text="Выбрать все", variable=self.all_var, command=self._on_all_changed, style="Dropdown.TCheckbutton")
+        all_check.pack(anchor="w", fill="x")
+        for column in self.columns:
+            check = ttk.Checkbutton(
+                self.popup,
+                text=column,
+                variable=self.column_vars[column],
+                command=self._on_column_changed,
+                style="Dropdown.TCheckbutton",
+            )
+            check.pack(anchor="w", fill="x")
+            if self.all_var.get():
+                check.state(["disabled"])
+
+    def _close_popup(self) -> None:
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.destroy()
+        self.popup = None
+
+    def _on_all_changed(self) -> None:
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            if self.all_var.get():
+                for variable in self.column_vars.values():
+                    variable.set(True)
+            elif self.columns:
+                for variable in self.column_vars.values():
+                    variable.set(False)
+        finally:
+            self._updating = False
+        self._refresh_text()
+        self._rebuild_popup()
+        if self.command:
+            self.command()
+
+    def _on_column_changed(self) -> None:
+        if self._updating:
+            return
+        selected_count = len(self.selected_columns())
+        if selected_count == len(self.columns) and self.columns:
+            self.all_var.set(True)
+            for variable in self.column_vars.values():
+                variable.set(True)
+            self._rebuild_popup()
+        else:
+            self.all_var.set(False)
+        self._refresh_text()
+        if self.command:
+            self.command()
+
+    def _refresh_text(self) -> None:
+        total = len(self.columns)
+        selected = total if self.all_var.get() else len(self.selected_columns())
+        self.textvariable.set(f"Выбрано {selected} из {total}")
 
 
 class GeocodeApp(tk.Tk):
@@ -535,6 +648,8 @@ class GeocodeApp(tk.Tk):
         style.configure("TEntry", fieldbackground=field, foreground="#121827", bordercolor="#4b5275", lightcolor=cyan, darkcolor="#4b5275", padding=7, relief="flat")
         style.configure("TSpinbox", fieldbackground=field, foreground="#121827", arrowsize=12)
         style.configure("TCheckbutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.configure("Dropdown.TCheckbutton", background=field, foreground="#121827", font=("Segoe UI", 9))
+        style.map("Dropdown.TCheckbutton", background=[("active", "#e5e7eb"), ("disabled", field)], foreground=[("disabled", "#6b7280")])
         style.configure("TRadiobutton", background=card, foreground="#ffffff", font=("Segoe UI", 9, "bold"), padding=(10, 6))
         style.map("TRadiobutton", background=[("selected", "#f02fb3"), ("active", "#343b62")], foreground=[("selected", "#171a2e"), ("active", "#ffffff")])
         style.configure("TCombobox", padding=7, fieldbackground=field, foreground="#121827", arrowcolor="#4b5275", relief="flat")
@@ -560,11 +675,11 @@ class GeocodeApp(tk.Tk):
 
         ttk.Label(io, text="Исходный файл (txt, csv, excel):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(io, textvariable=self.source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(io, text="Выбрать", command=self.open_file, bg="#222846", padx=12, pady=8).grid(row=0, column=5, sticky="ew", pady=4)
+        RoundedButton(io, text="Выбрать", command=self.open_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
 
         ttk.Label(io, text="Выходной файл:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(io, textvariable=self.output_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8).grid(row=1, column=5, sticky="ew", pady=4)
+        RoundedButton(io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
 
         ttk.Label(io, text="Лист Excel:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
         self.sheet_combo = ttk.Combobox(io, textvariable=self.sheet_name, state="readonly", values=[])
@@ -572,9 +687,8 @@ class GeocodeApp(tk.Tk):
         self.sheet_combo.bind("<<ComboboxSelected>>", lambda _event: self.reload_file())
 
         ttk.Label(io, text="Столбцы для работы:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
-        self.columns_combo = ttk.Combobox(io, textvariable=self.work_columns, state="readonly", values=[])
-        self.columns_combo.grid(row=3, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
-        self.columns_combo.bind("<<ComboboxSelected>>", self._select_work_column)
+        self.columns_dropdown = CheckColumnDropdown(io, textvariable=self.work_columns, command=self._on_work_columns_changed)
+        self.columns_dropdown.grid(row=3, column=1, columnspan=5, sticky="ew", padx=(6, 0), pady=4)
 
         ttk.Label(io, text="Разделитель:", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=4)
         self.delimiter_entry = ttk.Entry(io, textvariable=self.delimiter, width=4)
@@ -811,24 +925,21 @@ class GeocodeApp(tk.Tk):
         columns = self.table_data.headers
         for combo in (self.address_combo, self.lat_combo, self.lon_combo):
             combo.configure(values=columns)
-        self.columns_combo.configure(values=["Все", *columns])
+        self.columns_dropdown.set_columns(columns)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
-        self.work_columns.set("Все")
         self._refresh_controls()
 
-    def _select_work_column(self, _event: tk.Event | None = None) -> None:
-        selected = self.work_columns.get()
-        if selected == "Все":
-            return
-        if self.mode.get() == "address_to_coords":
-            self.address_column.set(selected)
-        elif not self.lat_column.get():
-            self.lat_column.set(selected)
-        else:
-            self.lon_column.set(selected)
-        self.work_columns.set(", ".join(column for column in [self.address_column.get(), self.lat_column.get(), self.lon_column.get()] if column))
+    def _on_work_columns_changed(self) -> None:
+        if self.table_data is not None:
+            self._show_preview(self.table_data)
+
+    def _selected_preview_columns(self, table: TableData) -> list[str]:
+        selected = self.columns_dropdown.selected_columns()
+        visible = selected or table.headers
+        extra_columns = [column for column in table.headers if column not in self.columns_dropdown.columns]
+        return [column for column in [*visible, *extra_columns] if column in table.headers]
 
     def _refresh_controls(self) -> None:
         address_mode = self.mode.get() == "address_to_coords"
@@ -840,7 +951,7 @@ class GeocodeApp(tk.Tk):
         self.lon_wrap.set_active(not address_mode)
 
     def _show_preview(self, table: TableData) -> None:
-        columns = table.headers
+        columns = self._selected_preview_columns(table)
         self.preview.delete(*self.preview.get_children())
         self.preview.configure(columns=columns)
         for column in columns:
