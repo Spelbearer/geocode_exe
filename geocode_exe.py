@@ -27,7 +27,6 @@ import threading
 import tkinter as tk
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -52,6 +51,7 @@ POLYGON_RESULT_COLUMN = "Внутри полигона"
 POLYGON_NAME_COLUMN = "Название полигона"
 POLYGON_ERROR_COLUMN = "Ошибка проверки полигона"
 PREVIEW_MAX_CELL_LENGTH = 40
+PREVIEW_MAX_ROWS = 20
 S2_TILE_POLYGON_COLUMN = "Полигон"
 S2_TILE_LEVEL_COLUMN = "Уровень S2"
 S2_TILE_TOKEN_COLUMN = "S2 token"
@@ -69,10 +69,9 @@ FILE_TYPES = [
     ("Все файлы", "*.*"),
 ]
 POLYGON_FILE_TYPES = [
-    ("Файлы полигонов", "*.geojson *.json *.kml *.csv *.txt"),
-    ("GeoJSON", "*.geojson *.json"),
-    ("KML", "*.kml"),
     ("CSV/TXT координаты", "*.csv *.txt"),
+    ("CSV", "*.csv"),
+    ("TXT", "*.txt"),
     ("Все файлы", "*.*"),
 ]
 
@@ -411,94 +410,10 @@ def read_polygons(
 ) -> list[PolygonData]:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
-    if suffix in {".geojson", ".json"}:
-        return read_geojson_polygons(file_path, encoding=encoding)
-    if suffix == ".kml":
-        return read_kml_polygons(file_path, encoding=encoding)
     if suffix in {".csv", ".txt"}:
         return read_coordinate_polygons(file_path, delimiter=delimiter, encoding=encoding, has_header=has_header, start_row=start_row, wkt_column=wkt_column)
-    raise ValueError(f"Неподдерживаемый формат файла полигона: {suffix}")
+    raise ValueError(f"Неподдерживаемый формат файла полигона: {suffix}. Поддерживаются только CSV и TXT.")
 
-
-def read_geojson_polygons(path: Path, *, encoding: str = "utf-8-sig") -> list[PolygonData]:
-    payload = json.loads(path.read_text(encoding=encoding, errors="replace"))
-    polygons: list[PolygonData] = []
-
-    def add_geometry(geometry: dict[str, Any], name: str, properties: dict[str, Any] | None = None) -> None:
-        properties = properties or {}
-        geometry_type = geometry.get("type")
-        coordinates = geometry.get("coordinates") or []
-        source_row = {key: _stringify_property(value) for key, value in properties.items()}
-        if "name" not in {key.lower() for key in source_row}:
-            source_row["Полигон"] = name
-        if geometry_type == "Polygon":
-            rings = [_geojson_ring_to_points(ring) for ring in coordinates]
-            if rings:
-                polygons.append(PolygonData(name=name, rings=rings, source_row=source_row.copy()))
-        elif geometry_type == "MultiPolygon":
-            for index, polygon in enumerate(coordinates, start=1):
-                rings = [_geojson_ring_to_points(ring) for ring in polygon]
-                if rings:
-                    polygon_name = f"{name} #{index}"
-                    row = source_row.copy()
-                    row["Полигон"] = polygon_name
-                    polygons.append(PolygonData(name=polygon_name, rings=rings, source_row=row))
-
-    if payload.get("type") == "FeatureCollection":
-        for index, feature in enumerate(payload.get("features") or [], start=1):
-            properties = feature.get("properties") or {}
-            name = str(properties.get("name") or properties.get("Name") or f"Полигон {index}")
-            geometry = feature.get("geometry") or {}
-            if isinstance(geometry, dict):
-                add_geometry(geometry, name, properties)
-    elif payload.get("type") == "Feature":
-        properties = payload.get("properties") or {}
-        add_geometry(payload.get("geometry") or {}, str(properties.get("name") or path.stem), properties)
-    else:
-        add_geometry(payload, path.stem, {})
-    if not polygons:
-        raise ValueError("В GeoJSON не найдены Polygon или MultiPolygon.")
-    return polygons
-
-
-def _stringify_property(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (str, int, float, bool)):
-        return str(value)
-    return json.dumps(value, ensure_ascii=False)
-
-
-def _geojson_ring_to_points(ring: list[Any]) -> list[tuple[float, float]]:
-    return [(float(point[0]), float(point[1])) for point in ring if len(point) >= 2]
-
-
-def read_kml_polygons(path: Path, *, encoding: str = "utf-8-sig") -> list[PolygonData]:
-    root = ET.fromstring(path.read_text(encoding=encoding, errors="replace"))
-    polygons: list[PolygonData] = []
-    for index, placemark in enumerate(root.findall(".//{*}Placemark"), start=1):
-        name_node = placemark.find("{*}name")
-        name = (name_node.text or "").strip() if name_node is not None else f"Полигон {index}"
-        for polygon in placemark.findall(".//{*}Polygon"):
-            rings = []
-            for coords in polygon.findall(".//{*}coordinates"):
-                points = _parse_kml_coordinates(coords.text or "")
-                if points:
-                    rings.append(points)
-            if rings:
-                polygons.append(PolygonData(name=name, rings=rings, source_row={"Полигон": name}))
-    if not polygons:
-        raise ValueError("В KML не найдены полигоны.")
-    return polygons
-
-
-def _parse_kml_coordinates(text: str) -> list[tuple[float, float]]:
-    points = []
-    for item in text.split():
-        parts = item.split(",")
-        if len(parts) >= 2:
-            points.append((float(parts[0]), float(parts[1])))
-    return points
 
 
 def read_coordinate_polygons(
@@ -1285,7 +1200,7 @@ class GeocodeApp(tk.Tk):
         polygon_io.columnconfigure(1, weight=1)
         polygon_io.columnconfigure(4, weight=1)
 
-        ttk.Label(polygon_io, text="Файл полигона (GeoJSON, KML, CSV/TXT):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(polygon_io, text="Файл полигона (CSV/TXT):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
         RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
 
@@ -1333,13 +1248,13 @@ class GeocodeApp(tk.Tk):
         self.polygon_progress.pack(side="top", fill="x", expand=True, pady=(6, 0))
 
         help_text = (
-            "Загрузите свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
+            "Загрузите свой полигон как CSV/TXT с координатами. "
             "Для CSV/TXT используйте настройки разделителя, заголовка, стартовой строки и кодировки; при наличии WKT выберите колонку с геометрией. "
             "Тайлы создаются через библиотеку s2sphere; уровень выбирается в выпадающем списке с примерным размером тайла."
         )
         ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=7, column=0, columnspan=6, sticky="w", pady=(10, 0))
 
-        table_frame = self._make_section(root, "Предпросмотр S2-тайлов", padding=6, fill="both", expand=True, pady=(12, 0))
+        table_frame = self._make_section(root, "Предпросмотр файла / S2-тайлов", padding=6, fill="both", expand=True, pady=(12, 0))
         self.polygon_preview = ttk.Treeview(table_frame, show="headings")
         yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.polygon_preview.yview)
         xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.polygon_preview.xview)
@@ -1355,25 +1270,50 @@ class GeocodeApp(tk.Tk):
         if filename:
             self.polygon_file.set(filename)
             self._refresh_file_format_controls(Path(filename), target="polygon")
-            self._fill_polygon_wkt_columns(Path(filename))
+            self._preview_polygon_source(Path(filename))
             if not self.polygon_output_file.get().strip():
                 self.polygon_output_file.set(str(Path(filename).with_name(f"{Path(filename).stem}_s2_tiles.xlsx")))
             self.polygon_status.set(f"Загружен файл полигона: {Path(filename).name}")
 
-    def _fill_polygon_wkt_columns(self, source_path: Path) -> None:
+    def _read_polygon_source_table(self, source_path: Path) -> TableData | None:
+        if source_path.suffix.lower() not in {".csv", ".txt"}:
+            return None
+        return read_delimited(
+            source_path,
+            delimiter=self.polygon_delimiter.get() or None,
+            encoding=self.polygon_encoding.get(),
+            has_header=self.polygon_has_header.get(),
+            start_row=max(int(self.polygon_start_row.get()), 1),
+        )
+
+    def _preview_polygon_source(self, source_path: Path) -> None:
+        try:
+            table = self._read_polygon_source_table(source_path)
+        except Exception as exc:
+            self.polygon_wkt_column.set("")
+            self.polygon_wkt_combo.configure(values=[], state="disabled")
+            messagebox.showerror("Ошибка предпросмотра полигона", str(exc))
+            return
+        if table is None:
+            self.polygon_wkt_column.set("")
+            self.polygon_wkt_combo.configure(values=[], state="disabled")
+            self._show_table(self.polygon_preview, TableData(headers=[], rows=[]))
+            return
+        self._fill_polygon_wkt_columns(source_path, table)
+        self._show_table(self.polygon_preview, table)
+
+    def _fill_polygon_wkt_columns(self, source_path: Path, table: TableData | None = None) -> None:
         if source_path.suffix.lower() not in {".csv", ".txt"}:
             self.polygon_wkt_column.set("")
             self.polygon_wkt_combo.configure(values=[], state="disabled")
             return
         try:
-            table = read_delimited(
-                source_path,
-                delimiter=self.polygon_delimiter.get() or None,
-                encoding=self.polygon_encoding.get(),
-                has_header=self.polygon_has_header.get(),
-                start_row=max(int(self.polygon_start_row.get()), 1),
-            )
+            table = table or self._read_polygon_source_table(source_path)
         except Exception:
+            self.polygon_wkt_column.set("")
+            self.polygon_wkt_combo.configure(values=[], state="disabled")
+            return
+        if table is None:
             self.polygon_wkt_column.set("")
             self.polygon_wkt_combo.configure(values=[], state="disabled")
             return
@@ -1646,7 +1586,7 @@ class GeocodeApp(tk.Tk):
         for column in columns:
             tree.heading(column, text=column)
             tree.column(column, width=160, minwidth=80, stretch=True)
-        for row in table.rows[:200]:
+        for row in table.rows[:PREVIEW_MAX_ROWS]:
             tree.insert("", "end", values=[format_preview_value(row.get(column, "")) for column in columns])
 
 
