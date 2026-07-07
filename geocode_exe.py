@@ -72,11 +72,11 @@ POLYGON_FILE_TYPES = [
     ("CSV/TXT координаты", "*.csv *.txt"),
     ("Все файлы", "*.*"),
 ]
+
 S2_LEVELS = list(range(10, 17))
 S2_LEVEL_SIZE_METERS = {level: round(7_842_000 / (2 ** level)) for level in S2_LEVELS}
 S2_LEVEL_DISPLAY_METERS = {level: max(1, round(S2_LEVEL_SIZE_METERS[level] / 100) * 100) for level in S2_LEVELS}
 S2_LEVEL_LABELS = {level: f"{level} (~{S2_LEVEL_DISPLAY_METERS[level]:,} × {S2_LEVEL_DISPLAY_METERS[level]:,} м)".replace(",", " ") for level in S2_LEVELS}
-
 
 class GeocodingError(RuntimeError):
     """Ошибка запроса к сервису геокодирования."""
@@ -544,7 +544,6 @@ def _point_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by:
         return False
     return min(ax, bx) - 1e-10 <= px <= max(ax, bx) + 1e-10 and min(ay, by) - 1e-10 <= py <= max(ay, by) + 1e-10
 
-
 def s2_level_from_label(label: str) -> int:
     try:
         return int(str(label).split()[0])
@@ -625,7 +624,6 @@ def _s2_cell_intersects_polygon(cell_id: Any, polygon: PolygonData) -> bool:
         if point_in_polygon(vertex.lng().degrees, vertex.lat().degrees, polygon):
             return True
     return False
-
 
 class RoundedField(tk.Frame):
     """Контейнер с мягкой скруглённой обводкой для полей выбора."""
@@ -933,6 +931,7 @@ class GeocodeApp(tk.Tk):
         self.polygon_file = tk.StringVar()
         self.polygon_lat_column = tk.StringVar()
         self.polygon_lon_column = tk.StringVar()
+
         self.s2_level = tk.StringVar(value=S2_LEVEL_LABELS[13])
         self.delimiter = tk.StringVar(value=";")
         self.has_header = tk.BooleanVar(value=True)
@@ -1032,6 +1031,13 @@ class GeocodeApp(tk.Tk):
         polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         self.notebook.add(geocode_root, text="Геокодирование")
         self.notebook.add(polygon_root, text="S2-тайлы по полигонам")
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True)
+        geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
+        polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
+        self.notebook.add(geocode_root, text="Геокодирование")
+        self.notebook.add(polygon_root, text="Полигоны и центроиды")
+
 
         io = self._make_section(geocode_root, "Исходный файл и настройка вывода", fill="x")
         io.columnconfigure(1, weight=1)
@@ -1159,6 +1165,35 @@ class GeocodeApp(tk.Tk):
         xscroll.grid(row=1, column=0, sticky="ew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
+        polygon_io = self._make_section(root, "Проверка центроидов по загружаемому полигону", fill="x")
+        polygon_io.columnconfigure(1, weight=1)
+        polygon_io.columnconfigure(4, weight=1)
+
+        ttk.Label(polygon_io, text="Таблица с центроидами:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.open_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
+
+        ttk.Label(polygon_io, text="Файл полигона:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
+
+        ttk.Label(polygon_io, text="Выходной файл:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.output_file).grid(row=2, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=2, column=5, sticky="ew", pady=4)
+
+        ttk.Label(polygon_io, text="Широта центроида", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=(10, 0))
+        self.polygon_lat_combo = ttk.Combobox(polygon_io, textvariable=self.polygon_lat_column, state="readonly", width=24)
+        self.polygon_lat_combo.grid(row=3, column=1, sticky="ew", padx=(6, 12), pady=(10, 0))
+        ttk.Label(polygon_io, text="Долгота центроида", style="Card.TLabel").grid(row=3, column=2, sticky="w", pady=(10, 0))
+        self.polygon_lon_combo = ttk.Combobox(polygon_io, textvariable=self.polygon_lon_column, state="readonly", width=24)
+        self.polygon_lon_combo.grid(row=3, column=3, sticky="ew", padx=(6, 12), pady=(10, 0))
+        RoundedButton(polygon_io, text="Проверить центроиды", command=self.start_polygon_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=3, column=5, sticky="ew", pady=(10, 0))
+
+        help_text = (
+            "Поддерживаются GeoJSON/JSON, KML и CSV/TXT с точками полигона. "
+            "В таблицу добавятся колонки: внутри полигона, название полигона и ошибка проверки."
+        )
+        ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=4, column=0, columnspan=6, sticky="w", pady=(10, 0))
 
     def open_polygon_file(self) -> None:
         filename = filedialog.askopenfilename(filetypes=POLYGON_FILE_TYPES)
@@ -1170,6 +1205,17 @@ class GeocodeApp(tk.Tk):
     def start_polygon_processing(self) -> None:
         if not self.polygon_file.get().strip():
             messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
+            return
+
+    def start_polygon_processing(self) -> None:
+        if self.table_data is None:
+            messagebox.showwarning("Нет файла", "Сначала загрузите таблицу с центроидами.")
+            return
+        if not self.polygon_file.get().strip():
+            messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
+            return
+        if not self.polygon_lat_column.get() or not self.polygon_lon_column.get():
+            messagebox.showwarning("Нет колонок", "Выберите колонки широты и долготы центроидов.")
             return
         if not self.output_file.get().strip():
             self.choose_output_file()
@@ -1186,6 +1232,20 @@ class GeocodeApp(tk.Tk):
             return
         self._show_table(self.polygon_preview, self.result_data)
         self.status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.output_file.get().strip()}")
+            polygons = read_polygons(self.polygon_file.get().strip(), delimiter=self.delimiter.get() or None, encoding=self.encoding.get())
+            self.result_data = filter_centroids_by_polygons(
+                self.table_data,
+                self.polygon_lat_column.get(),
+                self.polygon_lon_column.get(),
+                polygons,
+            )
+            write_table(self.result_data, self.output_file.get().strip())
+        except Exception as exc:
+            messagebox.showerror("Ошибка проверки полигонов", str(exc))
+            self.status.set("Проверка центроидов остановлена")
+            return
+        self._show_preview(self.result_data)
+        self.status.set(f"Проверено полигонов: {len(polygons)}. Файл сохранён: {self.output_file.get().strip()}")
 
     def open_file(self) -> None:
         filename = filedialog.askopenfilename(filetypes=FILE_TYPES)
@@ -1333,9 +1393,13 @@ class GeocodeApp(tk.Tk):
         columns = self.table_data.headers
         for combo in (self.address_combo, self.lat_combo, self.lon_combo):
             combo.configure(values=columns)
+        self.polygon_lat_combo.configure(values=columns)
+        self.polygon_lon_combo.configure(values=columns)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
+        self.polygon_lat_column.set(self.lat_column.get())
+        self.polygon_lon_column.set(self.lon_column.get())
         self._refresh_controls()
 
     def _refresh_controls(self) -> None:
