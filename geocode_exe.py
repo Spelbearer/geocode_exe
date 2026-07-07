@@ -59,6 +59,7 @@ S2_TILE_ID_COLUMN = "S2 cell id"
 S2_TILE_CENTER_LAT_COLUMN = "Широта центра тайла"
 S2_TILE_CENTER_LON_COLUMN = "Долгота центра тайла"
 S2_TILE_SIZE_COLUMN = "Размер тайла"
+S2_RESULT_COLUMNS = [S2_TILE_ID_COLUMN, S2_TILE_CENTER_LAT_COLUMN, S2_TILE_CENTER_LON_COLUMN]
 MAX_ADDRESS_QUERY_LENGTH = 300
 FILE_TYPES = [
     ("Табличные файлы", "*.xlsx *.xlsm *.csv *.txt"),
@@ -97,6 +98,7 @@ class TableData:
 class PolygonData:
     name: str
     rings: list[list[tuple[float, float]]]
+    source_row: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -422,18 +424,25 @@ def read_geojson_polygons(path: Path, *, encoding: str = "utf-8-sig") -> list[Po
     payload = json.loads(path.read_text(encoding=encoding, errors="replace"))
     polygons: list[PolygonData] = []
 
-    def add_geometry(geometry: dict[str, Any], name: str) -> None:
+    def add_geometry(geometry: dict[str, Any], name: str, properties: dict[str, Any] | None = None) -> None:
+        properties = properties or {}
         geometry_type = geometry.get("type")
         coordinates = geometry.get("coordinates") or []
+        source_row = {key: _stringify_property(value) for key, value in properties.items()}
+        if "name" not in {key.lower() for key in source_row}:
+            source_row["Полигон"] = name
         if geometry_type == "Polygon":
             rings = [_geojson_ring_to_points(ring) for ring in coordinates]
             if rings:
-                polygons.append(PolygonData(name=name, rings=rings))
+                polygons.append(PolygonData(name=name, rings=rings, source_row=source_row.copy()))
         elif geometry_type == "MultiPolygon":
             for index, polygon in enumerate(coordinates, start=1):
                 rings = [_geojson_ring_to_points(ring) for ring in polygon]
                 if rings:
-                    polygons.append(PolygonData(name=f"{name} #{index}", rings=rings))
+                    polygon_name = f"{name} #{index}"
+                    row = source_row.copy()
+                    row["Полигон"] = polygon_name
+                    polygons.append(PolygonData(name=polygon_name, rings=rings, source_row=row))
 
     if payload.get("type") == "FeatureCollection":
         for index, feature in enumerate(payload.get("features") or [], start=1):
@@ -441,15 +450,23 @@ def read_geojson_polygons(path: Path, *, encoding: str = "utf-8-sig") -> list[Po
             name = str(properties.get("name") or properties.get("Name") or f"Полигон {index}")
             geometry = feature.get("geometry") or {}
             if isinstance(geometry, dict):
-                add_geometry(geometry, name)
+                add_geometry(geometry, name, properties)
     elif payload.get("type") == "Feature":
         properties = payload.get("properties") or {}
-        add_geometry(payload.get("geometry") or {}, str(properties.get("name") or path.stem))
+        add_geometry(payload.get("geometry") or {}, str(properties.get("name") or path.stem), properties)
     else:
-        add_geometry(payload, path.stem)
+        add_geometry(payload, path.stem, {})
     if not polygons:
         raise ValueError("В GeoJSON не найдены Polygon или MultiPolygon.")
     return polygons
+
+
+def _stringify_property(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _geojson_ring_to_points(ring: list[Any]) -> list[tuple[float, float]]:
@@ -469,7 +486,7 @@ def read_kml_polygons(path: Path, *, encoding: str = "utf-8-sig") -> list[Polygo
                 if points:
                     rings.append(points)
             if rings:
-                polygons.append(PolygonData(name=name, rings=rings))
+                polygons.append(PolygonData(name=name, rings=rings, source_row={"Полигон": name}))
     if not polygons:
         raise ValueError("В KML не найдены полигоны.")
     return polygons
@@ -502,13 +519,15 @@ def read_coordinate_polygons(
     if not lon_column or not lat_column:
         raise ValueError("В CSV/TXT полигона нужны колонки широты и долготы.")
     grouped: dict[str, list[tuple[float, float]]] = {}
+    source_rows: dict[str, dict[str, Any]] = {}
     for row in table.rows:
         name = str(row.get(name_column, "") or path.stem) if name_column else path.stem
         lon = _parse_float(row.get(lon_column, ""))
         lat = _parse_float(row.get(lat_column, ""))
         if lon is not None and lat is not None:
             grouped.setdefault(name, []).append((lon, lat))
-    polygons = [PolygonData(name=name, rings=[points]) for name, points in grouped.items() if len(points) >= 3]
+            source_rows.setdefault(name, row.copy())
+    polygons = [PolygonData(name=name, rings=[points], source_row=source_rows.get(name, {"Полигон": name})) for name, points in grouped.items() if len(points) >= 3]
     if not polygons:
         raise ValueError("В CSV/TXT не найдено минимум 3 точки полигона.")
     return polygons
@@ -525,7 +544,10 @@ def read_wkt_polygons_from_table(table: TableData, wkt_column: str, default_name
         name = str(row.get(name_column, "") or f"{default_name} {index}") if name_column else f"{default_name} {index}"
         for polygon_index, rings in enumerate(parse_wkt_polygon_rings(wkt), start=1):
             polygon_name = name if polygon_index == 1 else f"{name} #{polygon_index}"
-            polygons.append(PolygonData(name=polygon_name, rings=rings))
+            source_row = row.copy()
+            if polygon_name != name:
+                source_row["Полигон"] = polygon_name
+            polygons.append(PolygonData(name=polygon_name, rings=rings, source_row=source_row))
     if not polygons:
         raise ValueError("В выбранной WKT-колонке не найдены POLYGON или MULTIPOLYGON.")
     return polygons
@@ -622,6 +644,24 @@ def point_in_polygon(x: float, y: float, polygon: PolygonData) -> bool:
     return not any(_point_in_ring(x, y, hole) for hole in polygon.rings[1:])
 
 
+
+def point_strictly_in_polygon(x: float, y: float, polygon: PolygonData) -> bool:
+    if not polygon.rings or _point_on_any_ring_boundary(x, y, polygon.rings):
+        return False
+    if not _point_in_ring(x, y, polygon.rings[0]):
+        return False
+    return not any(_point_in_ring(x, y, hole) for hole in polygon.rings[1:])
+
+
+def _point_on_any_ring_boundary(x: float, y: float, rings: list[list[tuple[float, float]]]) -> bool:
+    for ring in rings:
+        previous_x, previous_y = ring[-1]
+        for current_x, current_y in ring:
+            if _point_on_segment(x, y, previous_x, previous_y, current_x, current_y):
+                return True
+            previous_x, previous_y = current_x, current_y
+    return False
+
 def _point_in_ring(x: float, y: float, ring: list[tuple[float, float]]) -> bool:
     inside = False
     previous_x, previous_y = ring[-1]
@@ -657,41 +697,45 @@ def generate_s2_tiles_for_polygons(
 ) -> TableData:
     if s2sphere is None:
         raise ValueError("Для S2-тайлов нужен пакет s2sphere. Установите его перед запуском или сборкой EXE.")
-    headers = [
-        S2_TILE_POLYGON_COLUMN,
-        S2_TILE_LEVEL_COLUMN,
-        S2_TILE_TOKEN_COLUMN,
-        S2_TILE_ID_COLUMN,
-        S2_TILE_CENTER_LAT_COLUMN,
-        S2_TILE_CENTER_LON_COLUMN,
-        S2_TILE_SIZE_COLUMN,
-    ]
+    source_headers = _polygon_source_headers(polygons)
+    headers = source_headers[:]
+    for column in S2_RESULT_COLUMNS:
+        if column not in headers:
+            headers.append(column)
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     total = len(polygons)
     for polygon_index, polygon in enumerate(polygons, start=1):
+        before_count = len(rows)
         if progress:
             progress(polygon_index - 1, total, f"Подготовка: {polygon.name}")
         for cell_id in _candidate_s2_cells_for_polygon(polygon, level, progress=progress, polygon_index=polygon_index, polygon_total=total):
-            token = cell_id.to_token()
             key = (polygon.name, cell_id.id())
             if key in seen:
                 continue
             seen.add(key)
             center = s2sphere.LatLng.from_point(s2sphere.Cell(cell_id).get_center())
-            rows.append({
-                S2_TILE_POLYGON_COLUMN: polygon.name,
-                S2_TILE_LEVEL_COLUMN: str(level),
-                S2_TILE_TOKEN_COLUMN: token,
+            row = {header: "" for header in source_headers}
+            row.update(polygon.source_row or {S2_TILE_POLYGON_COLUMN: polygon.name})
+            row.update({
                 S2_TILE_ID_COLUMN: str(cell_id.id()),
                 S2_TILE_CENTER_LAT_COLUMN: f"{center.lat().degrees:.8f}",
                 S2_TILE_CENTER_LON_COLUMN: f"{center.lng().degrees:.8f}",
-                S2_TILE_SIZE_COLUMN: S2_LEVEL_LABELS.get(level, f"{level}"),
             })
+            rows.append(row)
         if progress:
-            progress(polygon_index, total, f"Готово: {polygon.name}, тайлов: {len(rows)}")
+            progress(polygon_index, total, f"Готово: {polygon.name}, тайлов: {len(rows) - before_count}")
     return TableData(headers=headers, rows=rows)
 
+
+def _polygon_source_headers(polygons: list[PolygonData]) -> list[str]:
+    headers: list[str] = []
+    for polygon in polygons:
+        source_row = polygon.source_row or {S2_TILE_POLYGON_COLUMN: polygon.name}
+        for header in source_row:
+            if header not in headers and header not in S2_RESULT_COLUMNS:
+                headers.append(header)
+    return headers
 
 def _candidate_s2_cells_for_polygon(
     polygon: PolygonData,
@@ -711,18 +755,15 @@ def _candidate_s2_cells_for_polygon(
         lon_step = step_meters / max(111_320 * max(abs(math.cos(math.radians(lat))), 0.1), 1)
         lon = min_lon
         while lon <= max_lon:
-            cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
-            if cell_id.id() not in cells and _s2_cell_intersects_polygon(cell_id, polygon):
-                cells[cell_id.id()] = cell_id
+            sample_cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
+            if sample_cell_id.id() not in cells and _s2_cell_center_strictly_inside_polygon(sample_cell_id, polygon):
+                cells[sample_cell_id.id()] = sample_cell_id
             lon += lon_step
         row_index += 1
         if progress and (row_index == 1 or row_index == lat_rows or row_index % 10 == 0):
-            progress(row_index, lat_rows, f"Полигон {polygon_index}/{polygon_total}: {polygon.name}, найдено тайлов: {len(cells)}")
+            overall_current = (polygon_index - 1) + min(row_index, lat_rows) / max(lat_rows, 1)
+            progress(overall_current, polygon_total, f"Полигон {polygon_index}/{polygon_total}: {polygon.name}, найдено тайлов: {len(cells)}")
         lat += lat_step
-    for lon, lat in polygon.rings[0]:
-        cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
-        if _s2_cell_intersects_polygon(cell_id, polygon):
-            cells[cell_id.id()] = cell_id
     return list(cells.values())
 
 
@@ -733,16 +774,10 @@ def _polygon_bounds(polygon: PolygonData) -> tuple[float, float, float, float]:
     return min(lons), min(lats), max(lons), max(lats)
 
 
-def _s2_cell_intersects_polygon(cell_id: Any, polygon: PolygonData) -> bool:
+def _s2_cell_center_strictly_inside_polygon(cell_id: Any, polygon: PolygonData) -> bool:
     cell = s2sphere.Cell(cell_id)
     center = s2sphere.LatLng.from_point(cell.get_center())
-    if point_in_polygon(center.lng().degrees, center.lat().degrees, polygon):
-        return True
-    for index in range(4):
-        vertex = s2sphere.LatLng.from_point(cell.get_vertex(index))
-        if point_in_polygon(vertex.lng().degrees, vertex.lat().degrees, polygon):
-            return True
-    return False
+    return point_strictly_in_polygon(center.lng().degrees, center.lat().degrees, polygon)
 
 class RoundedField(tk.Frame):
     """Контейнер с мягкой скруглённой обводкой для полей выбора."""
