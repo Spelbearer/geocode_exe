@@ -52,6 +52,9 @@ POLYGON_NAME_COLUMN = "Название полигона"
 POLYGON_ERROR_COLUMN = "Ошибка проверки полигона"
 PREVIEW_MAX_CELL_LENGTH = 40
 PREVIEW_MAX_ROWS = 20
+SETTINGS_RELOAD_DELAY_MS = 350
+SPINBOX_WIDTH = 8
+SPINBOX_MIN_WIDTH = 96
 S2_TILE_POLYGON_COLUMN = "Полигон"
 S2_TILE_LEVEL_COLUMN = "Уровень S2"
 S2_TILE_TOKEN_COLUMN = "S2 token"
@@ -1014,9 +1017,12 @@ class GeocodeApp(tk.Tk):
         self.polygon_encoding = tk.StringVar(value="utf-8-sig")
         self.geocode_status = tk.StringVar(value="Загрузите Excel, CSV или TXT файл")
         self.polygon_status = tk.StringVar(value="Загрузите файл полигона")
+        self._geocode_reload_job: str | None = None
+        self._polygon_preview_reload_job: str | None = None
 
         self._configure_style()
         self._build_ui()
+        self._bind_settings_auto_reload()
         self.after(150, self._poll_worker_events)
 
     def _configure_style(self) -> None:
@@ -1111,7 +1117,7 @@ class GeocodeApp(tk.Tk):
 
         io = self._make_section(geocode_root, "Исходный файл и настройка вывода", fill="x")
         io.columnconfigure(1, weight=1)
-        io.columnconfigure(4, weight=1)
+        io.columnconfigure(4, weight=0, minsize=SPINBOX_MIN_WIDTH)
 
         ttk.Label(io, text="Исходный файл (txt, csv, excel):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(io, textvariable=self.source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
@@ -1126,7 +1132,8 @@ class GeocodeApp(tk.Tk):
         self.delimiter_entry.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=4)
         ttk.Checkbutton(io, text="Наличие заголовка", variable=self.has_header, command=self.reload_file).grid(row=2, column=2, sticky="w", pady=4)
         ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
-        ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=6, command=self.reload_file).grid(row=2, column=4, sticky="w", pady=4)
+        self.start_row_spinbox = ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=SPINBOX_WIDTH, command=self.reload_file)
+        self.start_row_spinbox.grid(row=2, column=4, sticky="w", pady=4)
 
         ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
         self.encoding_radios = [
@@ -1185,6 +1192,37 @@ class GeocodeApp(tk.Tk):
         table_frame.rowconfigure(0, weight=1)
         self._refresh_controls()
 
+    def _bind_settings_auto_reload(self) -> None:
+        """Обновляет предпросмотр при ручном изменении настроек чтения файла."""
+        self.delimiter.trace_add("write", lambda *_args: self.schedule_geocode_reload())
+        self.start_row.trace_add("write", lambda *_args: self.schedule_geocode_reload())
+        self.polygon_delimiter.trace_add("write", lambda *_args: self.schedule_polygon_preview_reload())
+        self.polygon_start_row.trace_add("write", lambda *_args: self.schedule_polygon_preview_reload())
+
+    def schedule_geocode_reload(self) -> None:
+        if self._geocode_reload_job is not None:
+            self.after_cancel(self._geocode_reload_job)
+        self._geocode_reload_job = self.after(SETTINGS_RELOAD_DELAY_MS, self._run_scheduled_geocode_reload)
+
+    def _run_scheduled_geocode_reload(self) -> None:
+        self._geocode_reload_job = None
+        if self.source_file.get().strip():
+            self.reload_file(show_errors=False)
+
+    def schedule_polygon_preview_reload(self) -> None:
+        if self._polygon_preview_reload_job is not None:
+            self.after_cancel(self._polygon_preview_reload_job)
+        self._polygon_preview_reload_job = self.after(SETTINGS_RELOAD_DELAY_MS, self._run_scheduled_polygon_preview_reload)
+
+    def _run_scheduled_polygon_preview_reload(self) -> None:
+        self._polygon_preview_reload_job = None
+        self.refresh_polygon_preview(show_errors=False)
+
+    def refresh_polygon_preview(self, *, show_errors: bool = True) -> None:
+        filename = self.polygon_file.get().strip()
+        if filename:
+            self._preview_polygon_source(Path(filename), show_errors=show_errors)
+
     def _make_section(self, parent: tk.Widget, title: str, padding: int = 10, **pack_options: Any) -> ttk.Frame:
         section = ttk.Frame(parent, style="Card.TFrame", padding=padding)
         section.pack(**pack_options)
@@ -1198,7 +1236,7 @@ class GeocodeApp(tk.Tk):
     def _build_polygon_tab(self, root: tk.Widget) -> None:
         polygon_io = self._make_section(root, "Генерация S2-тайлов по загружаемым полигонам", fill="x")
         polygon_io.columnconfigure(1, weight=1)
-        polygon_io.columnconfigure(4, weight=1)
+        polygon_io.columnconfigure(4, weight=0, minsize=SPINBOX_MIN_WIDTH)
 
         ttk.Label(polygon_io, text="Файл полигона (CSV/TXT):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
@@ -1211,14 +1249,15 @@ class GeocodeApp(tk.Tk):
         ttk.Label(polygon_io, text="Разделитель:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
         self.polygon_delimiter_entry = ttk.Entry(polygon_io, textvariable=self.polygon_delimiter, width=4)
         self.polygon_delimiter_entry.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=4)
-        ttk.Checkbutton(polygon_io, text="Наличие заголовка", variable=self.polygon_has_header).grid(row=2, column=2, sticky="w", pady=4)
+        ttk.Checkbutton(polygon_io, text="Наличие заголовка", variable=self.polygon_has_header, command=self.schedule_polygon_preview_reload).grid(row=2, column=2, sticky="w", pady=4)
         ttk.Label(polygon_io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
-        ttk.Spinbox(polygon_io, from_=1, to=9999, textvariable=self.polygon_start_row, width=6).grid(row=2, column=4, sticky="w", pady=4)
+        self.polygon_start_row_spinbox = ttk.Spinbox(polygon_io, from_=1, to=9999, textvariable=self.polygon_start_row, width=SPINBOX_WIDTH, command=self.schedule_polygon_preview_reload)
+        self.polygon_start_row_spinbox.grid(row=2, column=4, sticky="w", pady=4)
 
         ttk.Label(polygon_io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
         self.polygon_encoding_radios = [
-            RoundedRadio(polygon_io, text="UTF-8", variable=self.polygon_encoding, value="utf-8-sig"),
-            RoundedRadio(polygon_io, text="CP1251", variable=self.polygon_encoding, value="cp1251"),
+            RoundedRadio(polygon_io, text="UTF-8", variable=self.polygon_encoding, value="utf-8-sig", command=self.schedule_polygon_preview_reload),
+            RoundedRadio(polygon_io, text="CP1251", variable=self.polygon_encoding, value="cp1251", command=self.schedule_polygon_preview_reload),
         ]
         self.polygon_encoding_radios[0].grid(row=3, column=1, sticky="w", padx=(6, 0), pady=4)
         self.polygon_encoding_radios[1].grid(row=3, column=2, sticky="w", pady=4)
@@ -1254,7 +1293,7 @@ class GeocodeApp(tk.Tk):
         )
         ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=7, column=0, columnspan=6, sticky="w", pady=(10, 0))
 
-        table_frame = self._make_section(root, "Предпросмотр файла / S2-тайлов", padding=6, fill="both", expand=True, pady=(12, 0))
+        table_frame = self._make_section(root, "Предпросмотр исходного файла", padding=6, fill="both", expand=True, pady=(12, 0))
         self.polygon_preview = ttk.Treeview(table_frame, show="headings")
         yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.polygon_preview.yview)
         xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.polygon_preview.xview)
@@ -1286,13 +1325,14 @@ class GeocodeApp(tk.Tk):
             start_row=max(int(self.polygon_start_row.get()), 1),
         )
 
-    def _preview_polygon_source(self, source_path: Path) -> None:
+    def _preview_polygon_source(self, source_path: Path, *, show_errors: bool = True) -> None:
         try:
             table = self._read_polygon_source_table(source_path)
         except Exception as exc:
             self.polygon_wkt_column.set("")
             self.polygon_wkt_combo.configure(values=[], state="disabled")
-            messagebox.showerror("Ошибка предпросмотра полигона", str(exc))
+            if show_errors:
+                messagebox.showerror("Ошибка предпросмотра полигона", str(exc))
             return
         if table is None:
             self.polygon_wkt_column.set("")
@@ -1384,7 +1424,7 @@ class GeocodeApp(tk.Tk):
             messagebox.showerror("Ошибка проверки полигонов", str(exc))
             self.polygon_status.set("Проверка центроидов остановлена")
             return
-        self._show_table(self.polygon_preview, self.result_data)
+        self.refresh_polygon_preview(show_errors=False)
         self.polygon_status.set(f"Проверено полигонов: {len(polygons)}. Файл сохранён: {self.polygon_output_file.get().strip()}")
 
     def open_file(self) -> None:
@@ -1406,7 +1446,7 @@ class GeocodeApp(tk.Tk):
         if filename:
             self.polygon_output_file.set(filename)
 
-    def reload_file(self) -> None:
+    def reload_file(self, *, show_errors: bool = True) -> None:
         filename = self.source_file.get().strip()
         if not filename:
             return
@@ -1419,7 +1459,8 @@ class GeocodeApp(tk.Tk):
                 start_row=max(int(self.start_row.get()), 1),
             )
         except Exception as exc:
-            messagebox.showerror("Ошибка открытия файла", str(exc))
+            if show_errors:
+                messagebox.showerror("Ошибка открытия файла", str(exc))
             return
         self.result_data = None
         self.loaded_path = Path(filename)
@@ -1524,7 +1565,8 @@ class GeocodeApp(tk.Tk):
             elif event == "done":
                 self.start_button.config(state="normal")
                 self.result_data = payload
-                self._show_preview(self.result_data)
+                if self.table_data is not None:
+                    self._show_preview(self.table_data)
                 output_path = self.output_file.get().strip()
                 try:
                     write_table(self.result_data, output_path)
@@ -1550,7 +1592,7 @@ class GeocodeApp(tk.Tk):
             elif event == "s2_done":
                 self.s2_button.config(state="normal")
                 self.result_data = payload
-                self._show_table(self.polygon_preview, self.result_data)
+                self.refresh_polygon_preview(show_errors=False)
                 self.polygon_progress.configure(value=self.polygon_progress.cget("maximum"))
                 self.polygon_progress_label.configure(text="100%")
                 self.polygon_status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.polygon_output_file.get().strip()}")
