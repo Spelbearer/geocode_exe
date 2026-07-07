@@ -259,17 +259,29 @@ def read_delimited(
     if not values:
         return TableData(headers=[], rows=[])
     if has_header:
-        headers = [str(value or "") for value in values[0]]
+        headers = _unique_headers([str(value or "") for value in values[0]])
         data_rows = values[1:]
     else:
         width = max(len(row) for row in values)
-        headers = [f"Столбец {index}" for index in range(1, width + 1)]
+        headers = _unique_headers([f"Столбец {index}" for index in range(1, width + 1)])
         data_rows = values
     rows = []
     for source_row in data_rows:
         row = {header: source_row[index] if index < len(source_row) else "" for index, header in enumerate(headers)}
         rows.append(row)
     return TableData(headers=headers, rows=rows)
+
+
+
+def _unique_headers(headers: list[str]) -> list[str]:
+    result: list[str] = []
+    counts: dict[str, int] = {}
+    for index, header in enumerate(headers, start=1):
+        base = header.strip() or f"Столбец {index}"
+        count = counts.get(base, 0) + 1
+        counts[base] = count
+        result.append(base if count == 1 else f"{base} ({count})")
+    return result
 
 
 def read_excel(path: Path, *, sheet_name: str = "", has_header: bool = True, start_row: int = 1) -> TableData:
@@ -281,11 +293,11 @@ def read_excel(path: Path, *, sheet_name: str = "", has_header: bool = True, sta
     if not values:
         return TableData(headers=[], rows=[])
     if has_header:
-        headers = [str(value or "") for value in values[0]]
+        headers = _unique_headers([str(value or "") for value in values[0]])
         data_rows = values[1:]
     else:
         width = max(len(row) for row in values)
-        headers = [f"Столбец {index}" for index in range(1, width + 1)]
+        headers = _unique_headers([f"Столбец {index}" for index in range(1, width + 1)])
         data_rows = values
     rows = []
     for source_row in data_rows:
@@ -638,7 +650,11 @@ def s2_level_from_label(label: str) -> int:
         return 13
 
 
-def generate_s2_tiles_for_polygons(polygons: list[PolygonData], level: int) -> TableData:
+def generate_s2_tiles_for_polygons(
+    polygons: list[PolygonData],
+    level: int,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> TableData:
     if s2sphere is None:
         raise ValueError("Для S2-тайлов нужен пакет s2sphere. Установите его перед запуском или сборкой EXE.")
     headers = [
@@ -652,8 +668,11 @@ def generate_s2_tiles_for_polygons(polygons: list[PolygonData], level: int) -> T
     ]
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
-    for polygon in polygons:
-        for cell_id in _candidate_s2_cells_for_polygon(polygon, level):
+    total = len(polygons)
+    for polygon_index, polygon in enumerate(polygons, start=1):
+        if progress:
+            progress(polygon_index - 1, total, f"Подготовка: {polygon.name}")
+        for cell_id in _candidate_s2_cells_for_polygon(polygon, level, progress=progress, polygon_index=polygon_index, polygon_total=total):
             token = cell_id.to_token()
             key = (polygon.name, cell_id.id())
             if key in seen:
@@ -669,23 +688,36 @@ def generate_s2_tiles_for_polygons(polygons: list[PolygonData], level: int) -> T
                 S2_TILE_CENTER_LON_COLUMN: f"{center.lng().degrees:.8f}",
                 S2_TILE_SIZE_COLUMN: S2_LEVEL_LABELS.get(level, f"{level}"),
             })
+        if progress:
+            progress(polygon_index, total, f"Готово: {polygon.name}, тайлов: {len(rows)}")
     return TableData(headers=headers, rows=rows)
 
 
-def _candidate_s2_cells_for_polygon(polygon: PolygonData, level: int) -> list[Any]:
+def _candidate_s2_cells_for_polygon(
+    polygon: PolygonData,
+    level: int,
+    progress: Callable[[int, int, str], None] | None = None,
+    polygon_index: int = 1,
+    polygon_total: int = 1,
+) -> list[Any]:
     min_lon, min_lat, max_lon, max_lat = _polygon_bounds(polygon)
     step_meters = max(S2_LEVEL_SIZE_METERS.get(level, 1000) / 2, 50)
     lat_step = step_meters / 111_320
+    lat_rows = max(1, int(math.ceil((max_lat - min_lat) / lat_step)) + 1)
     lat = min_lat
+    row_index = 0
     cells: dict[int, Any] = {}
     while lat <= max_lat:
         lon_step = step_meters / max(111_320 * max(abs(math.cos(math.radians(lat))), 0.1), 1)
         lon = min_lon
         while lon <= max_lon:
             cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
-            if _s2_cell_intersects_polygon(cell_id, polygon):
+            if cell_id.id() not in cells and _s2_cell_intersects_polygon(cell_id, polygon):
                 cells[cell_id.id()] = cell_id
             lon += lon_step
+        row_index += 1
+        if progress and (row_index == 1 or row_index == lat_rows or row_index % 10 == 0):
+            progress(row_index, lat_rows, f"Полигон {polygon_index}/{polygon_total}: {polygon.name}, найдено тайлов: {len(cells)}")
         lat += lat_step
     for lon, lat in polygon.rings[0]:
         cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
@@ -1248,7 +1280,8 @@ class GeocodeApp(tk.Tk):
             width=28,
         )
         self.s2_level_combo.grid(row=5, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
-        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=5, column=5, sticky="ew", pady=(10, 0))
+        self.s2_button = RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36)
+        self.s2_button.grid(row=5, column=5, sticky="ew", pady=(10, 0))
 
         help_text = (
             "Загрузите свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
@@ -1305,6 +1338,14 @@ class GeocodeApp(tk.Tk):
             self.choose_output_file()
         if not self.output_file.get().strip():
             return
+
+        self.s2_button.config(state="disabled")
+        self.progress.configure(mode="determinate", maximum=1, value=0)
+        self.progress_label.configure(text="0%")
+        self.status.set("Чтение полигона и подготовка S2-тайлов...")
+        threading.Thread(target=self._process_s2_tiles_in_thread, daemon=True).start()
+
+    def _process_s2_tiles_in_thread(self) -> None:
         try:
             level = s2_level_from_label(self.s2_level.get())
             polygons = read_polygons(
@@ -1315,14 +1356,16 @@ class GeocodeApp(tk.Tk):
                 start_row=max(int(self.start_row.get()), 1),
                 wkt_column=self.polygon_wkt_column.get(),
             )
-            self.result_data = generate_s2_tiles_for_polygons(polygons, level)
-            write_table(self.result_data, self.output_file.get().strip())
+
+            def progress(current: int, total: int, label: str) -> None:
+                self._add_worker_event("s2_progress", (current, total, label))
+
+            result = generate_s2_tiles_for_polygons(polygons, level, progress)
+            write_table(result, self.output_file.get().strip())
         except Exception as exc:
-            messagebox.showerror("Ошибка генерации S2-тайлов", str(exc))
-            self.status.set("Генерация S2-тайлов остановлена")
-            return
-        self._show_table(self.polygon_preview, self.result_data)
-        self.status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.output_file.get().strip()}")
+            self._add_worker_event("s2_error", str(exc))
+        else:
+            self._add_worker_event("s2_done", result)
 
     def start_polygon_processing(self) -> None:
         if self.table_data is None:
@@ -1496,6 +1539,24 @@ class GeocodeApp(tk.Tk):
                     self.progress.configure(value=self.progress.cget("maximum"))
                     self.progress_label.configure(text="100%")
                     self.status.set(f"Готово. Файл сохранён: {output_path}")
+            elif event == "s2_progress":
+                current, total, label = payload
+                self.progress.configure(maximum=max(total, 1), value=min(current, total))
+                percent = int(min(current, total) / max(total, 1) * 100)
+                self.progress_label.configure(text=f"{percent}%")
+                self.status.set(label)
+            elif event == "s2_error":
+                self.s2_button.config(state="normal")
+                self.progress_label.configure(text="Ошибка")
+                messagebox.showerror("Ошибка генерации S2-тайлов", str(payload))
+                self.status.set("Генерация S2-тайлов остановлена")
+            elif event == "s2_done":
+                self.s2_button.config(state="normal")
+                self.result_data = payload
+                self._show_table(self.polygon_preview, self.result_data)
+                self.progress.configure(value=self.progress.cget("maximum"))
+                self.progress_label.configure(text="100%")
+                self.status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.output_file.get().strip()}")
         self.after(150, self._poll_worker_events)
 
     def _fill_columns(self) -> None:
