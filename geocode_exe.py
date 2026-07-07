@@ -1030,12 +1030,6 @@ class GeocodeApp(tk.Tk):
         geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         self.notebook.add(geocode_root, text="Геокодирование")
-        self.notebook.add(polygon_root, text="S2-тайлы по полигонам")
-        self.notebook = ttk.Notebook(root)
-        self.notebook.pack(fill="both", expand=True)
-        geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
-        polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
-        self.notebook.add(geocode_root, text="Геокодирование")
         self.notebook.add(polygon_root, text="Полигоны и центроиды")
 
 
@@ -1147,7 +1141,7 @@ class GeocodeApp(tk.Tk):
             width=28,
         )
         self.s2_level_combo.grid(row=2, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
-        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_polygon_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=2, column=4, sticky="ew", pady=(10, 0))
+        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=2, column=4, sticky="ew", pady=(10, 0))
 
         help_text = (
             "Загрузите только свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
@@ -1202,20 +1196,9 @@ class GeocodeApp(tk.Tk):
             if not self.output_file.get().strip():
                 self.output_file.set(str(Path(filename).with_name(f"{Path(filename).stem}_s2_tiles.xlsx")))
 
-    def start_polygon_processing(self) -> None:
+    def start_s2_tile_processing(self) -> None:
         if not self.polygon_file.get().strip():
             messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
-            return
-
-    def start_polygon_processing(self) -> None:
-        if self.table_data is None:
-            messagebox.showwarning("Нет файла", "Сначала загрузите таблицу с центроидами.")
-            return
-        if not self.polygon_file.get().strip():
-            messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
-            return
-        if not self.polygon_lat_column.get() or not self.polygon_lon_column.get():
-            messagebox.showwarning("Нет колонок", "Выберите колонки широты и долготы центроидов.")
             return
         if not self.output_file.get().strip():
             self.choose_output_file()
@@ -1232,6 +1215,22 @@ class GeocodeApp(tk.Tk):
             return
         self._show_table(self.polygon_preview, self.result_data)
         self.status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.output_file.get().strip()}")
+
+    def start_polygon_processing(self) -> None:
+        if self.table_data is None:
+            messagebox.showwarning("Нет файла", "Сначала загрузите таблицу с центроидами.")
+            return
+        if not self.polygon_file.get().strip():
+            messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
+            return
+        if not self.polygon_lat_column.get() or not self.polygon_lon_column.get():
+            messagebox.showwarning("Нет колонок", "Выберите колонки широты и долготы центроидов.")
+            return
+        if not self.output_file.get().strip():
+            self.choose_output_file()
+        if not self.output_file.get().strip():
+            return
+        try:
             polygons = read_polygons(self.polygon_file.get().strip(), delimiter=self.delimiter.get() or None, encoding=self.encoding.get())
             self.result_data = filter_centroids_by_polygons(
                 self.table_data,
