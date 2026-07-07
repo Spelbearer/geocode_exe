@@ -1310,8 +1310,6 @@ class GeocodeApp(tk.Tk):
             self.polygon_file.set(filename)
             self._refresh_file_format_controls(Path(filename), target="polygon")
             self._preview_polygon_source(Path(filename))
-            if not self.polygon_output_file.get().strip():
-                self.polygon_output_file.set(str(Path(filename).with_name(f"{Path(filename).stem}_s2_tiles.xlsx")))
             self.polygon_status.set(f"Загружен файл полигона: {Path(filename).name}")
 
     def _read_polygon_source_table(self, source_path: Path) -> TableData | None:
@@ -1499,7 +1497,7 @@ class GeocodeApp(tk.Tk):
         if not self.output_file.get().strip():
             self.choose_output_file()
         if not self.output_file.get().strip():
-            messagebox.showwarning("Нет пути сохранения", "Выберите путь для автоматического сохранения результата.")
+            messagebox.showwarning("Нет пути сохранения", "Выберите путь для сохранения результата.")
             return
 
         self.start_button.config(state="disabled")
