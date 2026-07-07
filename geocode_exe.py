@@ -384,7 +384,14 @@ def process_coordinates(
     return result
 
 
-def read_polygons(path: str | Path, *, delimiter: str | None = None, encoding: str = "utf-8-sig") -> list[PolygonData]:
+def read_polygons(
+    path: str | Path,
+    *,
+    delimiter: str | None = None,
+    encoding: str = "utf-8-sig",
+    has_header: bool = True,
+    start_row: int = 1,
+) -> list[PolygonData]:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
     if suffix in {".geojson", ".json"}:
@@ -392,7 +399,7 @@ def read_polygons(path: str | Path, *, delimiter: str | None = None, encoding: s
     if suffix == ".kml":
         return read_kml_polygons(file_path, encoding=encoding)
     if suffix in {".csv", ".txt"}:
-        return read_coordinate_polygons(file_path, delimiter=delimiter, encoding=encoding)
+        return read_coordinate_polygons(file_path, delimiter=delimiter, encoding=encoding, has_header=has_header, start_row=start_row)
     raise ValueError(f"Неподдерживаемый формат файла полигона: {suffix}")
 
 
@@ -462,8 +469,15 @@ def _parse_kml_coordinates(text: str) -> list[tuple[float, float]]:
     return points
 
 
-def read_coordinate_polygons(path: Path, *, delimiter: str | None = None, encoding: str = "utf-8-sig") -> list[PolygonData]:
-    table = read_delimited(path, delimiter=delimiter, encoding=encoding, has_header=True)
+def read_coordinate_polygons(
+    path: Path,
+    *,
+    delimiter: str | None = None,
+    encoding: str = "utf-8-sig",
+    has_header: bool = True,
+    start_row: int = 1,
+) -> list[PolygonData]:
+    table = read_delimited(path, delimiter=delimiter, encoding=encoding, has_header=has_header, start_row=start_row)
     lon_column = guess_column(table.headers, ["lon", "lng", "longitude", "долг", "x"])
     lat_column = guess_column(table.headers, ["lat", "latitude", "шир", "y"])
     name_column = find_column(table.headers, ["polygon", "name", "назв", "имя", "полигон"])
@@ -1023,14 +1037,14 @@ class GeocodeApp(tk.Tk):
         hero.create_arc(-80, 16, 330, 180, start=10, extent=120, outline="#38d6e8", width=3, style="arc")
         hero.create_arc(650, -90, 1160, 160, start=190, extent=130, outline="#f02fb3", width=4, style="arc")
         hero.create_text(8, 26, anchor="w", text="Геокодирование файлов", fill="#ffffff", font=("Segoe UI", 22, "bold"))
-        hero.create_text(10, 58, anchor="w", text="Настройте входной файл, выберите режим обработки или проверьте центроиды внутри полигона.", fill="#aab4d6", font=("Segoe UI", 10))
+        hero.create_text(10, 58, anchor="w", text="Настройте входной файл, выберите режим обработки или сформируйте S2-тайлы по полигонам.", fill="#aab4d6", font=("Segoe UI", 10))
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="both", expand=True)
         geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         self.notebook.add(geocode_root, text="Геокодирование")
-        self.notebook.add(polygon_root, text="Полигоны и центроиды")
+        self.notebook.add(polygon_root, text="Полигоны и S2")
 
 
         io = self._make_section(geocode_root, "Исходный файл и настройка вывода", fill="x")
@@ -1122,17 +1136,32 @@ class GeocodeApp(tk.Tk):
     def _build_polygon_tab(self, root: tk.Widget) -> None:
         polygon_io = self._make_section(root, "Генерация S2-тайлов по загружаемым полигонам", fill="x")
         polygon_io.columnconfigure(1, weight=1)
-        polygon_io.columnconfigure(3, weight=1)
+        polygon_io.columnconfigure(4, weight=1)
 
-        ttk.Label(polygon_io, text="Файл полигона:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=4, sticky="ew", pady=4)
+        ttk.Label(polygon_io, text="Файл полигона (GeoJSON, KML, CSV/TXT):", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
 
         ttk.Label(polygon_io, text="Выходной файл:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(polygon_io, textvariable=self.output_file).grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(polygon_io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=4, sticky="ew", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.output_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
 
-        ttk.Label(polygon_io, text="Уровень S2-тайлов:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(polygon_io, text="Разделитель:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        self.polygon_delimiter_entry = ttk.Entry(polygon_io, textvariable=self.delimiter, width=4)
+        self.polygon_delimiter_entry.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=4)
+        ttk.Checkbutton(polygon_io, text="Наличие заголовка", variable=self.has_header).grid(row=2, column=2, sticky="w", pady=4)
+        ttk.Label(polygon_io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
+        ttk.Spinbox(polygon_io, from_=1, to=9999, textvariable=self.start_row, width=6).grid(row=2, column=4, sticky="w", pady=4)
+
+        ttk.Label(polygon_io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        self.polygon_encoding_radios = [
+            RoundedRadio(polygon_io, text="UTF-8", variable=self.encoding, value="utf-8-sig"),
+            RoundedRadio(polygon_io, text="CP1251", variable=self.encoding, value="cp1251"),
+        ]
+        self.polygon_encoding_radios[0].grid(row=3, column=1, sticky="w", padx=(6, 0), pady=4)
+        self.polygon_encoding_radios[1].grid(row=3, column=2, sticky="w", pady=4)
+
+        ttk.Label(polygon_io, text="Уровень S2-тайлов:", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=(10, 0))
         self.s2_level_combo = ttk.Combobox(
             polygon_io,
             textvariable=self.s2_level,
@@ -1140,14 +1169,15 @@ class GeocodeApp(tk.Tk):
             values=[S2_LEVEL_LABELS[level] for level in S2_LEVELS],
             width=28,
         )
-        self.s2_level_combo.grid(row=2, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
-        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=2, column=4, sticky="ew", pady=(10, 0))
+        self.s2_level_combo.grid(row=4, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
+        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=4, column=5, sticky="ew", pady=(10, 0))
 
         help_text = (
-            "Загрузите только свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
+            "Загрузите свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
+            "Для CSV/TXT используйте настройки разделителя, заголовка, стартовой строки и кодировки. "
             "Тайлы создаются через библиотеку s2sphere; уровень выбирается в выпадающем списке с примерным размером тайла."
         )
-        ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=3, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=5, column=0, columnspan=6, sticky="w", pady=(10, 0))
 
         table_frame = self._make_section(root, "Предпросмотр S2-тайлов", padding=6, fill="both", expand=True, pady=(12, 0))
         self.polygon_preview = ttk.Treeview(table_frame, show="headings")
@@ -1159,40 +1189,12 @@ class GeocodeApp(tk.Tk):
         xscroll.grid(row=1, column=0, sticky="ew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
-        polygon_io = self._make_section(root, "Проверка центроидов по загружаемому полигону", fill="x")
-        polygon_io.columnconfigure(1, weight=1)
-        polygon_io.columnconfigure(4, weight=1)
-
-        ttk.Label(polygon_io, text="Таблица с центроидами:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(polygon_io, textvariable=self.source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(polygon_io, text="Выбрать", command=self.open_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
-
-        ttk.Label(polygon_io, text="Файл полигона:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
-
-        ttk.Label(polygon_io, text="Выходной файл:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(polygon_io, textvariable=self.output_file).grid(row=2, column=1, columnspan=4, sticky="ew", padx=(6, 6), pady=4)
-        RoundedButton(polygon_io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=2, column=5, sticky="ew", pady=4)
-
-        ttk.Label(polygon_io, text="Широта центроида", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        self.polygon_lat_combo = ttk.Combobox(polygon_io, textvariable=self.polygon_lat_column, state="readonly", width=24)
-        self.polygon_lat_combo.grid(row=3, column=1, sticky="ew", padx=(6, 12), pady=(10, 0))
-        ttk.Label(polygon_io, text="Долгота центроида", style="Card.TLabel").grid(row=3, column=2, sticky="w", pady=(10, 0))
-        self.polygon_lon_combo = ttk.Combobox(polygon_io, textvariable=self.polygon_lon_column, state="readonly", width=24)
-        self.polygon_lon_combo.grid(row=3, column=3, sticky="ew", padx=(6, 12), pady=(10, 0))
-        RoundedButton(polygon_io, text="Проверить центроиды", command=self.start_polygon_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=3, column=5, sticky="ew", pady=(10, 0))
-
-        help_text = (
-            "Поддерживаются GeoJSON/JSON, KML и CSV/TXT с точками полигона. "
-            "В таблицу добавятся колонки: внутри полигона, название полигона и ошибка проверки."
-        )
-        ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=4, column=0, columnspan=6, sticky="w", pady=(10, 0))
 
     def open_polygon_file(self) -> None:
         filename = filedialog.askopenfilename(filetypes=POLYGON_FILE_TYPES)
         if filename:
             self.polygon_file.set(filename)
+            self._refresh_file_format_controls(Path(filename))
             if not self.output_file.get().strip():
                 self.output_file.set(str(Path(filename).with_name(f"{Path(filename).stem}_s2_tiles.xlsx")))
 
@@ -1206,7 +1208,13 @@ class GeocodeApp(tk.Tk):
             return
         try:
             level = s2_level_from_label(self.s2_level.get())
-            polygons = read_polygons(self.polygon_file.get().strip(), delimiter=self.delimiter.get() or None, encoding=self.encoding.get())
+            polygons = read_polygons(
+                self.polygon_file.get().strip(),
+                delimiter=self.delimiter.get() or None,
+                encoding=self.encoding.get(),
+                has_header=self.has_header.get(),
+                start_row=max(int(self.start_row.get()), 1),
+            )
             self.result_data = generate_s2_tiles_for_polygons(polygons, level)
             write_table(self.result_data, self.output_file.get().strip())
         except Exception as exc:
@@ -1290,7 +1298,11 @@ class GeocodeApp(tk.Tk):
         delimiter_state = "normal" if delimited_file or not excel_file else "disabled"
         encoding_state = "normal" if delimited_file or not excel_file else "disabled"
         self.delimiter_entry.configure(state=delimiter_state)
+        if hasattr(self, "polygon_delimiter_entry"):
+            self.polygon_delimiter_entry.configure(state=delimiter_state)
         for radio in self.encoding_radios:
+            radio.button.configure(state=encoding_state)
+        for radio in getattr(self, "polygon_encoding_radios", []):
             radio.button.configure(state=encoding_state)
 
     def start_processing(self) -> None:
@@ -1392,13 +1404,9 @@ class GeocodeApp(tk.Tk):
         columns = self.table_data.headers
         for combo in (self.address_combo, self.lat_combo, self.lon_combo):
             combo.configure(values=columns)
-        self.polygon_lat_combo.configure(values=columns)
-        self.polygon_lon_combo.configure(values=columns)
         self.address_column.set(guess_column(columns, ["адрес", "address", "addr"]))
         self.lat_column.set(guess_column(columns, ["lat", "latitude", "шир", "широта"]))
         self.lon_column.set(guess_column(columns, ["lon", "lng", "longitude", "долг", "долгота"]))
-        self.polygon_lat_column.set(self.lat_column.get())
-        self.polygon_lon_column.set(self.lon_column.get())
         self._refresh_controls()
 
     def _refresh_controls(self) -> None:
