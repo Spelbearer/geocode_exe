@@ -24,7 +24,6 @@ import time
 import threading
 import tkinter as tk
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,16 +32,11 @@ from typing import Any, Callable
 
 openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("openpyxl") else None
 
-DEFAULT_FORWARD_URL = "https://dadatatest.t2.ru/suggestions/ui/service/api-proxy/address/suggest"
-DEFAULT_REVERSE_URL = "https://dadatatest.t2.ru/suggestions/ui/service/api-proxy/address/geolocate"
+DEFAULT_FORWARD_URL = "https://dadata.t2.ru//suggestions/api/4_1/rs/suggest/address"
+DEFAULT_REVERSE_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/geolocate/address"
 DEFAULT_HTTP_HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-    "Origin": "https://dadatatest.t2.ru",
-    "Referer": "https://dadatatest.t2.ru/suggestions/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "X-Requested-With": "XMLHttpRequest",
+    "Accept": "application/json",
+    "Content-Type": "application/json",
 }
 RETRYABLE_HTTP_STATUSES = {502, 503, 504}
 RESULT_ADDRESS_COLUMN = "Найденный адрес"
@@ -116,7 +110,7 @@ class GeocodingClient:
         }
 
     def _post(self, url: str, request_payload: dict[str, str]) -> dict[str, Any]:
-        payload = urllib.parse.urlencode({"apiRequest": json.dumps(request_payload, ensure_ascii=False)}).encode("utf-8")
+        payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
         context = None if self.verify_ssl else ssl._create_unverified_context()
         attempts = max(self.retry_count, 1)
         last_error: Exception | None = None
