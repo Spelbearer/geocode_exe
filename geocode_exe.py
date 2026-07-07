@@ -32,16 +32,19 @@ from typing import Any, Callable
 
 openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("openpyxl") else None
 
-DEFAULT_FORWARD_URL = "https://dadata.t2.ru//suggestions/api/4_1/rs/suggest/address"
+DEFAULT_FORWARD_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/suggest/address"
 DEFAULT_REVERSE_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/geolocate/address"
 DEFAULT_HTTP_HEADERS = {
     "Accept": "application/json",
-    "Content-Type": "application/json",
+    "Content-Type": "application/json; charset=utf-8",
+    "User-Agent": "GeocodeEXE/1.0",
 }
 RETRYABLE_HTTP_STATUSES = {502, 503, 504}
 RESULT_ADDRESS_COLUMN = "Найденный адрес"
 RESULT_LAT_COLUMN = "Широта результата"
 RESULT_LON_COLUMN = "Долгота результата"
+RESULT_ERROR_COLUMN = "Ошибка геокодирования"
+MAX_ADDRESS_QUERY_LENGTH = 300
 FILE_TYPES = [
     ("Табличные файлы", "*.xlsx *.xlsm *.csv *.txt"),
     ("Excel", "*.xlsx *.xlsm"),
@@ -74,14 +77,14 @@ class GeocodingClient:
     retry_delay: float = 1.0
 
     def geocode_address(self, address: str) -> dict[str, str]:
-        address = (address or "").strip()
+        address = _prepare_address_query(address)
         if not address:
-            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: "", RESULT_LON_COLUMN: ""}
+            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: "", RESULT_LON_COLUMN: "", RESULT_ERROR_COLUMN: ""}
 
-        data = self._post(self.forward_url, {"query": address})
+        data = self._post(self.forward_url, {"query": address, "count": 1})
         suggestions = data.get("suggestions") or []
         if not suggestions:
-            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: "", RESULT_LON_COLUMN: ""}
+            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: "", RESULT_LON_COLUMN: "", RESULT_ERROR_COLUMN: "Адрес не найден"}
 
         first = suggestions[0]
         details = first.get("data") or {}
@@ -89,27 +92,29 @@ class GeocodingClient:
             RESULT_ADDRESS_COLUMN: first.get("unrestricted_value") or first.get("value") or "",
             RESULT_LAT_COLUMN: str(details.get("geo_lat") or ""),
             RESULT_LON_COLUMN: str(details.get("geo_lon") or ""),
+            RESULT_ERROR_COLUMN: "",
         }
 
     def reverse_geocode(self, lat: Any, lon: Any) -> dict[str, str]:
         lat_text = str(lat or "").strip().replace(",", ".")
         lon_text = str(lon or "").strip().replace(",", ".")
         if not lat_text or not lon_text:
-            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text}
+            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text, RESULT_ERROR_COLUMN: ""}
 
-        data = self._post(self.reverse_url, {"lat": lat_text, "lon": lon_text})
+        data = self._post(self.reverse_url, {"lat": lat_text, "lon": lon_text, "count": 1})
         suggestions = data.get("suggestions") or []
         if not suggestions:
-            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text}
+            return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text, RESULT_ERROR_COLUMN: "Адрес не найден"}
 
         first = suggestions[0]
         return {
             RESULT_ADDRESS_COLUMN: first.get("unrestricted_value") or first.get("value") or "",
             RESULT_LAT_COLUMN: lat_text,
             RESULT_LON_COLUMN: lon_text,
+            RESULT_ERROR_COLUMN: "",
         }
 
-    def _post(self, url: str, request_payload: dict[str, str]) -> dict[str, Any]:
+    def _post(self, url: str, request_payload: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
         context = None if self.verify_ssl else ssl._create_unverified_context()
         attempts = max(self.retry_count, 1)
@@ -157,12 +162,26 @@ class GeocodingClient:
         return parsed
 
 
+def _prepare_address_query(address: str) -> str:
+    query = " ".join(str(address or "").split())
+    return query[:MAX_ADDRESS_QUERY_LENGTH]
+
+
 def _read_error_body(error: urllib.error.HTTPError) -> str:
     try:
-        body = error.read(500).decode("utf-8", errors="replace").strip()
+        body = error.read(1000).decode("utf-8", errors="replace").strip()
     except Exception:
         return ""
-    return f". Ответ сервиса: {body}" if body else ""
+    if not body:
+        return ""
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return f". Ответ сервиса: {body}"
+    message = (parsed.get("message") or parsed.get("reason") or parsed.get("error")) if isinstance(parsed, dict) else None
+    if message and message != "No message available":
+        return f". Ответ сервиса: {message}"
+    return f". Ответ сервиса: {body}"
 
 
 def read_table(
@@ -279,7 +298,7 @@ def write_excel(table: TableData, path: Path) -> None:
 
 def append_result_columns(table: TableData) -> TableData:
     result = table.copy()
-    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN]:
+    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN]:
         if column not in result.headers:
             result.headers.append(column)
     return result
@@ -295,7 +314,15 @@ def process_addresses(
     total = len(result.rows)
     for index, row in enumerate(result.rows, start=1):
         source = str(row.get(address_column, ""))
-        row.update(client.geocode_address(source))
+        try:
+            row.update(client.geocode_address(source))
+        except GeocodingError as exc:
+            row.update({
+                RESULT_ADDRESS_COLUMN: "",
+                RESULT_LAT_COLUMN: "",
+                RESULT_LON_COLUMN: "",
+                RESULT_ERROR_COLUMN: str(exc),
+            })
         if progress:
             progress(index, total, source)
     return result
@@ -313,7 +340,15 @@ def process_coordinates(
     for index, row in enumerate(result.rows, start=1):
         lat = row.get(lat_column, "")
         lon = row.get(lon_column, "")
-        row.update(client.reverse_geocode(lat, lon))
+        try:
+            row.update(client.reverse_geocode(lat, lon))
+        except GeocodingError as exc:
+            row.update({
+                RESULT_ADDRESS_COLUMN: "",
+                RESULT_LAT_COLUMN: str(lat or ""),
+                RESULT_LON_COLUMN: str(lon or ""),
+                RESULT_ERROR_COLUMN: str(exc),
+            })
         if progress:
             progress(index, total, f"{lat}, {lon}")
     return result
