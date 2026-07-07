@@ -20,6 +20,7 @@ import importlib
 import importlib.util
 import json
 import ssl
+import time
 import threading
 import tkinter as tk
 import urllib.error
@@ -34,6 +35,16 @@ openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("open
 
 DEFAULT_FORWARD_URL = "https://dadatatest.t2.ru/suggestions/ui/service/api-proxy/address/suggest"
 DEFAULT_REVERSE_URL = "https://dadatatest.t2.ru/suggestions/ui/service/api-proxy/address/geolocate"
+DEFAULT_HTTP_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+    "Origin": "https://dadatatest.t2.ru",
+    "Referer": "https://dadatatest.t2.ru/suggestions/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "X-Requested-With": "XMLHttpRequest",
+}
+RETRYABLE_HTTP_STATUSES = {502, 503, 504}
 RESULT_ADDRESS_COLUMN = "Найденный адрес"
 RESULT_LAT_COLUMN = "Широта результата"
 RESULT_LON_COLUMN = "Долгота результата"
@@ -65,6 +76,8 @@ class GeocodingClient:
     reverse_url: str = DEFAULT_REVERSE_URL
     timeout: float = 20.0
     verify_ssl: bool = False
+    retry_count: int = 3
+    retry_delay: float = 1.0
 
     def geocode_address(self, address: str) -> dict[str, str]:
         address = (address or "").strip()
@@ -104,20 +117,42 @@ class GeocodingClient:
 
     def _post(self, url: str, request_payload: dict[str, str]) -> dict[str, Any]:
         payload = urllib.parse.urlencode({"apiRequest": json.dumps(request_payload, ensure_ascii=False)}).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=payload,
-            method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
-        )
         context = None if self.verify_ssl else ssl._create_unverified_context()
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout, context=context) as response:
-                text = response.read().decode("utf-8")
-        except urllib.error.URLError as exc:
-            raise GeocodingError(f"Ошибка запроса к сервису: {exc}") from exc
-        except TimeoutError as exc:
-            raise GeocodingError("Превышено время ожидания сервиса") from exc
+        attempts = max(self.retry_count, 1)
+        last_error: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            request = urllib.request.Request(
+                url,
+                data=payload,
+                method="POST",
+                headers=DEFAULT_HTTP_HEADERS,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout, context=context) as response:
+                    text = response.read().decode("utf-8")
+                    break
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                if exc.code in RETRYABLE_HTTP_STATUSES and attempt < attempts:
+                    time.sleep(self.retry_delay * attempt)
+                    continue
+                details = _read_error_body(exc)
+                raise GeocodingError(f"Сервис вернул HTTP {exc.code}: {exc.reason}{details}") from exc
+            except urllib.error.URLError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    time.sleep(self.retry_delay * attempt)
+                    continue
+                raise GeocodingError(f"Ошибка запроса к сервису: {exc}") from exc
+            except TimeoutError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    time.sleep(self.retry_delay * attempt)
+                    continue
+                raise GeocodingError("Превышено время ожидания сервиса") from exc
+        else:
+            raise GeocodingError(f"Не удалось выполнить запрос к сервису: {last_error}")
 
         try:
             parsed = json.loads(text)
@@ -126,6 +161,14 @@ class GeocodingClient:
         if not isinstance(parsed, dict):
             raise GeocodingError("Сервис вернул неожиданный формат ответа")
         return parsed
+
+
+def _read_error_body(error: urllib.error.HTTPError) -> str:
+    try:
+        body = error.read(500).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+    return f". Ответ сервиса: {body}" if body else ""
 
 
 def read_table(
