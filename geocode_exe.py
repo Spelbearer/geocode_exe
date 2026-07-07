@@ -2,12 +2,13 @@
 Однофайловое GUI-приложение для пакетного геокодирования.
 
 Можно передавать этот файл как есть или собрать из него один EXE:
-    pyinstaller --onefile --windowed --name GeocodeEXE geocode_exe.py
+    python -m pip install --upgrade -r requirements-exe.txt
+    pyinstaller --onefile --windowed --name GeocodeEXE --hidden-import=openpyxl geocode_exe.py
 
 Зависимости для запуска .py:
 - Python 3.10+
 - tkinter (обычно входит в Python для Windows)
-- openpyxl нужен только для чтения/записи Excel .xlsx/.xlsm
+- openpyxl нужен только для чтения/записи Excel .xlsx/.xlsm; при сборке EXE добавьте --hidden-import=openpyxl
 
 CSV/TXT и запросы к сервису работают только на стандартной библиотеке Python.
 """
