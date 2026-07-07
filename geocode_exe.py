@@ -19,6 +19,7 @@ import csv
 import importlib
 import importlib.util
 import json
+import math
 import ssl
 import time
 import threading
@@ -32,6 +33,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("openpyxl") else None
+s2sphere = importlib.import_module("s2sphere") if importlib.util.find_spec("s2sphere") else None
 
 DEFAULT_FORWARD_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/suggest/address"
 DEFAULT_REVERSE_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/geolocate/address"
@@ -48,6 +50,13 @@ RESULT_ERROR_COLUMN = "Ошибка геокодирования"
 POLYGON_RESULT_COLUMN = "Внутри полигона"
 POLYGON_NAME_COLUMN = "Название полигона"
 POLYGON_ERROR_COLUMN = "Ошибка проверки полигона"
+S2_TILE_POLYGON_COLUMN = "Полигон"
+S2_TILE_LEVEL_COLUMN = "Уровень S2"
+S2_TILE_TOKEN_COLUMN = "S2 token"
+S2_TILE_ID_COLUMN = "S2 cell id"
+S2_TILE_CENTER_LAT_COLUMN = "Широта центра тайла"
+S2_TILE_CENTER_LON_COLUMN = "Долгота центра тайла"
+S2_TILE_SIZE_COLUMN = "Размер тайла"
 MAX_ADDRESS_QUERY_LENGTH = 300
 FILE_TYPES = [
     ("Табличные файлы", "*.xlsx *.xlsm *.csv *.txt"),
@@ -64,6 +73,10 @@ POLYGON_FILE_TYPES = [
     ("Все файлы", "*.*"),
 ]
 
+S2_LEVELS = list(range(10, 17))
+S2_LEVEL_SIZE_METERS = {level: round(7_842_000 / (2 ** level)) for level in S2_LEVELS}
+S2_LEVEL_DISPLAY_METERS = {level: max(1, round(S2_LEVEL_SIZE_METERS[level] / 100) * 100) for level in S2_LEVELS}
+S2_LEVEL_LABELS = {level: f"{level} (~{S2_LEVEL_DISPLAY_METERS[level]:,} × {S2_LEVEL_DISPLAY_METERS[level]:,} м)".replace(",", " ") for level in S2_LEVELS}
 
 class GeocodingError(RuntimeError):
     """Ошибка запроса к сервису геокодирования."""
@@ -531,6 +544,86 @@ def _point_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by:
         return False
     return min(ax, bx) - 1e-10 <= px <= max(ax, bx) + 1e-10 and min(ay, by) - 1e-10 <= py <= max(ay, by) + 1e-10
 
+def s2_level_from_label(label: str) -> int:
+    try:
+        return int(str(label).split()[0])
+    except (ValueError, IndexError):
+        return 13
+
+
+def generate_s2_tiles_for_polygons(polygons: list[PolygonData], level: int) -> TableData:
+    if s2sphere is None:
+        raise ValueError("Для S2-тайлов нужен пакет s2sphere. Установите его перед запуском или сборкой EXE.")
+    headers = [
+        S2_TILE_POLYGON_COLUMN,
+        S2_TILE_LEVEL_COLUMN,
+        S2_TILE_TOKEN_COLUMN,
+        S2_TILE_ID_COLUMN,
+        S2_TILE_CENTER_LAT_COLUMN,
+        S2_TILE_CENTER_LON_COLUMN,
+        S2_TILE_SIZE_COLUMN,
+    ]
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for polygon in polygons:
+        for cell_id in _candidate_s2_cells_for_polygon(polygon, level):
+            token = cell_id.to_token()
+            key = (polygon.name, cell_id.id())
+            if key in seen:
+                continue
+            seen.add(key)
+            center = s2sphere.LatLng.from_point(s2sphere.Cell(cell_id).get_center())
+            rows.append({
+                S2_TILE_POLYGON_COLUMN: polygon.name,
+                S2_TILE_LEVEL_COLUMN: str(level),
+                S2_TILE_TOKEN_COLUMN: token,
+                S2_TILE_ID_COLUMN: str(cell_id.id()),
+                S2_TILE_CENTER_LAT_COLUMN: f"{center.lat().degrees:.8f}",
+                S2_TILE_CENTER_LON_COLUMN: f"{center.lng().degrees:.8f}",
+                S2_TILE_SIZE_COLUMN: S2_LEVEL_LABELS.get(level, f"{level}"),
+            })
+    return TableData(headers=headers, rows=rows)
+
+
+def _candidate_s2_cells_for_polygon(polygon: PolygonData, level: int) -> list[Any]:
+    min_lon, min_lat, max_lon, max_lat = _polygon_bounds(polygon)
+    step_meters = max(S2_LEVEL_SIZE_METERS.get(level, 1000) / 2, 50)
+    lat_step = step_meters / 111_320
+    lat = min_lat
+    cells: dict[int, Any] = {}
+    while lat <= max_lat:
+        lon_step = step_meters / max(111_320 * max(abs(math.cos(math.radians(lat))), 0.1), 1)
+        lon = min_lon
+        while lon <= max_lon:
+            cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
+            if _s2_cell_intersects_polygon(cell_id, polygon):
+                cells[cell_id.id()] = cell_id
+            lon += lon_step
+        lat += lat_step
+    for lon, lat in polygon.rings[0]:
+        cell_id = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon)).parent(level)
+        if _s2_cell_intersects_polygon(cell_id, polygon):
+            cells[cell_id.id()] = cell_id
+    return list(cells.values())
+
+
+def _polygon_bounds(polygon: PolygonData) -> tuple[float, float, float, float]:
+    points = [point for ring in polygon.rings for point in ring]
+    lons = [point[0] for point in points]
+    lats = [point[1] for point in points]
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def _s2_cell_intersects_polygon(cell_id: Any, polygon: PolygonData) -> bool:
+    cell = s2sphere.Cell(cell_id)
+    center = s2sphere.LatLng.from_point(cell.get_center())
+    if point_in_polygon(center.lng().degrees, center.lat().degrees, polygon):
+        return True
+    for index in range(4):
+        vertex = s2sphere.LatLng.from_point(cell.get_vertex(index))
+        if point_in_polygon(vertex.lng().degrees, vertex.lat().degrees, polygon):
+            return True
+    return False
 
 class RoundedField(tk.Frame):
     """Контейнер с мягкой скруглённой обводкой для полей выбора."""
@@ -838,6 +931,8 @@ class GeocodeApp(tk.Tk):
         self.polygon_file = tk.StringVar()
         self.polygon_lat_column = tk.StringVar()
         self.polygon_lon_column = tk.StringVar()
+
+        self.s2_level = tk.StringVar(value=S2_LEVEL_LABELS[13])
         self.delimiter = tk.StringVar(value=";")
         self.has_header = tk.BooleanVar(value=True)
         self.start_row = tk.IntVar(value=1)
@@ -935,7 +1030,14 @@ class GeocodeApp(tk.Tk):
         geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         self.notebook.add(geocode_root, text="Геокодирование")
+        self.notebook.add(polygon_root, text="S2-тайлы по полигонам")
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True)
+        geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
+        polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
+        self.notebook.add(geocode_root, text="Геокодирование")
         self.notebook.add(polygon_root, text="Полигоны и центроиды")
+
 
         io = self._make_section(geocode_root, "Исходный файл и настройка вывода", fill="x")
         io.columnconfigure(1, weight=1)
@@ -1024,6 +1126,45 @@ class GeocodeApp(tk.Tk):
         return content
 
     def _build_polygon_tab(self, root: tk.Widget) -> None:
+        polygon_io = self._make_section(root, "Генерация S2-тайлов по загружаемым полигонам", fill="x")
+        polygon_io.columnconfigure(1, weight=1)
+        polygon_io.columnconfigure(3, weight=1)
+
+        ttk.Label(polygon_io, text="Файл полигона:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.polygon_file).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.open_polygon_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=4, sticky="ew", pady=4)
+
+        ttk.Label(polygon_io, text="Выходной файл:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(polygon_io, textvariable=self.output_file).grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 6), pady=4)
+        RoundedButton(polygon_io, text="Выбрать", command=self.choose_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=4, sticky="ew", pady=4)
+
+        ttk.Label(polygon_io, text="Уровень S2-тайлов:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.s2_level_combo = ttk.Combobox(
+            polygon_io,
+            textvariable=self.s2_level,
+            state="readonly",
+            values=[S2_LEVEL_LABELS[level] for level in S2_LEVELS],
+            width=28,
+        )
+        self.s2_level_combo.grid(row=2, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
+        RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_polygon_processing, bg="#222846", padx=14, pady=8, height=36).grid(row=2, column=4, sticky="ew", pady=(10, 0))
+
+        help_text = (
+            "Загрузите только свой полигон: GeoJSON/JSON, KML или CSV/TXT с координатами. "
+            "Тайлы создаются через библиотеку s2sphere; уровень выбирается в выпадающем списке с примерным размером тайла."
+        )
+        ttk.Label(polygon_io, text=help_text, style="Muted.TLabel", wraplength=850).grid(row=3, column=0, columnspan=5, sticky="w", pady=(10, 0))
+
+        table_frame = self._make_section(root, "Предпросмотр S2-тайлов", padding=6, fill="both", expand=True, pady=(12, 0))
+        self.polygon_preview = ttk.Treeview(table_frame, show="headings")
+        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.polygon_preview.yview)
+        xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.polygon_preview.xview)
+        self.polygon_preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.polygon_preview.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
         polygon_io = self._make_section(root, "Проверка центроидов по загружаемому полигону", fill="x")
         polygon_io.columnconfigure(1, weight=1)
         polygon_io.columnconfigure(4, weight=1)
@@ -1058,6 +1199,13 @@ class GeocodeApp(tk.Tk):
         filename = filedialog.askopenfilename(filetypes=POLYGON_FILE_TYPES)
         if filename:
             self.polygon_file.set(filename)
+            if not self.output_file.get().strip():
+                self.output_file.set(str(Path(filename).with_name(f"{Path(filename).stem}_s2_tiles.xlsx")))
+
+    def start_polygon_processing(self) -> None:
+        if not self.polygon_file.get().strip():
+            messagebox.showwarning("Нет полигона", "Выберите файл полигона.")
+            return
 
     def start_polygon_processing(self) -> None:
         if self.table_data is None:
@@ -1074,6 +1222,16 @@ class GeocodeApp(tk.Tk):
         if not self.output_file.get().strip():
             return
         try:
+            level = s2_level_from_label(self.s2_level.get())
+            polygons = read_polygons(self.polygon_file.get().strip(), delimiter=self.delimiter.get() or None, encoding=self.encoding.get())
+            self.result_data = generate_s2_tiles_for_polygons(polygons, level)
+            write_table(self.result_data, self.output_file.get().strip())
+        except Exception as exc:
+            messagebox.showerror("Ошибка генерации S2-тайлов", str(exc))
+            self.status.set("Генерация S2-тайлов остановлена")
+            return
+        self._show_table(self.polygon_preview, self.result_data)
+        self.status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.output_file.get().strip()}")
             polygons = read_polygons(self.polygon_file.get().strip(), delimiter=self.delimiter.get() or None, encoding=self.encoding.get())
             self.result_data = filter_centroids_by_polygons(
                 self.table_data,
@@ -1254,14 +1412,17 @@ class GeocodeApp(tk.Tk):
         self.lon_wrap.set_active(not address_mode)
 
     def _show_preview(self, table: TableData) -> None:
+        self._show_table(self.preview, table)
+
+    def _show_table(self, tree: ttk.Treeview, table: TableData) -> None:
         columns = table.headers
-        self.preview.delete(*self.preview.get_children())
-        self.preview.configure(columns=columns)
+        tree.delete(*tree.get_children())
+        tree.configure(columns=columns)
         for column in columns:
-            self.preview.heading(column, text=column)
-            self.preview.column(column, width=160, minwidth=80, stretch=True)
+            tree.heading(column, text=column)
+            tree.column(column, width=160, minwidth=80, stretch=True)
         for row in table.rows[:200]:
-            self.preview.insert("", "end", values=[str(row.get(column, "")) for column in columns])
+            tree.insert("", "end", values=[str(row.get(column, "")) for column in columns])
 
 
 def guess_column(columns: list[str], needles: list[str]) -> str:
