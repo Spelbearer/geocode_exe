@@ -1146,6 +1146,7 @@ class GeocodeApp(tk.Tk):
         ttk.Checkbutton(io, text="Наличие заголовка", variable=self.has_header, command=self.reload_file).grid(row=2, column=2, sticky="w", pady=4)
         ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
         self.start_row_spinbox = ttk.Spinbox(io, from_=1, to=9999, textvariable=self.start_row, width=SPINBOX_WIDTH, command=self.reload_file)
+        self._block_widget_mousewheel(self.start_row_spinbox)
         self.start_row_spinbox.grid(row=2, column=4, sticky="w", pady=4)
 
         ttk.Label(io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
@@ -1164,16 +1165,19 @@ class GeocodeApp(tk.Tk):
         self.address_wrap = RoundedField(settings, active=True)
         self.address_wrap.grid(row=2, column=0, sticky="we", pady=(2, 0))
         self.address_combo = ttk.Combobox(self.address_wrap.content, textvariable=self.address_column, state="readonly", width=32)
+        self._block_widget_mousewheel(self.address_combo)
         self.address_combo.pack(fill="x", expand=True)
         ttk.Label(settings, text="Широта", style="Card.TLabel").grid(row=1, column=1, sticky="w", pady=(10, 0))
         self.lat_wrap = RoundedField(settings)
         self.lat_wrap.grid(row=2, column=1, sticky="we", pady=(2, 0), padx=(20, 0))
         self.lat_combo = ttk.Combobox(self.lat_wrap.content, textvariable=self.lat_column, state="readonly", width=24)
+        self._block_widget_mousewheel(self.lat_combo)
         self.lat_combo.pack(fill="x", expand=True)
         ttk.Label(settings, text="Долгота", style="Card.TLabel").grid(row=1, column=2, sticky="w", pady=(10, 0))
         self.lon_wrap = RoundedField(settings)
         self.lon_wrap.grid(row=2, column=2, sticky="we", pady=(2, 0), padx=(20, 0))
         self.lon_combo = ttk.Combobox(self.lon_wrap.content, textvariable=self.lon_column, state="readonly", width=24)
+        self._block_widget_mousewheel(self.lon_combo)
         self.lon_combo.pack(fill="x", expand=True)
         settings.columnconfigure(0, weight=2)
         settings.columnconfigure(1, weight=1)
@@ -1204,6 +1208,16 @@ class GeocodeApp(tk.Tk):
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
         self._refresh_controls()
+
+    def _block_widget_mousewheel(self, widget: tk.Widget) -> None:
+        """Запрещает менять значение поля колесиком мыши."""
+
+        def stop_mousewheel(event: tk.Event) -> str:
+            return "break"
+
+        widget.bind("<MouseWheel>", stop_mousewheel, add="+")
+        widget.bind("<Button-4>", stop_mousewheel, add="+")
+        widget.bind("<Button-5>", stop_mousewheel, add="+")
 
     def _dismiss_open_dropdowns(self) -> None:
         """Скрывает раскрытые списки перед прокруткой основного окна."""
@@ -1286,6 +1300,7 @@ class GeocodeApp(tk.Tk):
         ttk.Checkbutton(polygon_io, text="Наличие заголовка", variable=self.polygon_has_header, command=self.schedule_polygon_preview_reload).grid(row=2, column=2, sticky="w", pady=4)
         ttk.Label(polygon_io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
         self.polygon_start_row_spinbox = ttk.Spinbox(polygon_io, from_=1, to=9999, textvariable=self.polygon_start_row, width=SPINBOX_WIDTH, command=self.schedule_polygon_preview_reload)
+        self._block_widget_mousewheel(self.polygon_start_row_spinbox)
         self.polygon_start_row_spinbox.grid(row=2, column=4, sticky="w", pady=4)
 
         ttk.Label(polygon_io, text="Кодировка файла:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
@@ -1298,6 +1313,7 @@ class GeocodeApp(tk.Tk):
 
         ttk.Label(polygon_io, text="Колонка WKT (для CSV/TXT):", style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=(10, 0))
         self.polygon_wkt_combo = ttk.Combobox(polygon_io, textvariable=self.polygon_wkt_column, state="disabled", width=28)
+        self._block_widget_mousewheel(self.polygon_wkt_combo)
         self.polygon_wkt_combo.grid(row=4, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
 
         ttk.Label(polygon_io, text="Уровень S2-тайлов:", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=(10, 0))
@@ -1308,6 +1324,7 @@ class GeocodeApp(tk.Tk):
             values=[S2_LEVEL_LABELS[level] for level in S2_LEVELS],
             width=28,
         )
+        self._block_widget_mousewheel(self.s2_level_combo)
         self.s2_level_combo.grid(row=5, column=1, sticky="w", padx=(6, 12), pady=(10, 0))
         self.s2_button = RoundedButton(polygon_io, text="Сформировать S2-тайлы", command=self.start_s2_tile_processing, bg="#222846", padx=14, pady=8, height=36)
         self.s2_button.grid(row=5, column=5, sticky="ew", pady=(10, 0))
