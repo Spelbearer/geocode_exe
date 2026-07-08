@@ -30,7 +30,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("openpyxl") else None
 s2sphere = importlib.import_module("s2sphere") if importlib.util.find_spec("s2sphere") else None
@@ -973,6 +973,13 @@ class CheckColumnDropdown(ttk.Frame):
         self.menu.post(x, y)
         self.menu.focus_set()
 
+    def dismiss_menu(self) -> None:
+        """Закрывает открытое меню, если пользователь прокручивает окно."""
+        try:
+            self.menu.unpost()
+        except tk.TclError:
+            pass
+
     def _refresh_text(self) -> None:
         total = len(self.columns)
         if not total:
@@ -1077,7 +1084,12 @@ class GeocodeApp(tk.Tk):
 
     def _build_ui(self) -> None:
         scroll_canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg="#171a2e")
-        main_scrollbar = ttk.Scrollbar(self, orient="vertical", command=scroll_canvas.yview)
+
+        def scroll_main_canvas(*args: Any) -> None:
+            self._dismiss_open_dropdowns()
+            scroll_canvas.yview(*args)
+
+        main_scrollbar = ttk.Scrollbar(self, orient="vertical", command=scroll_main_canvas)
         scroll_canvas.configure(yscrollcommand=main_scrollbar.set)
         main_scrollbar.pack(side="right", fill="y")
         scroll_canvas.pack(side="left", fill="both", expand=True)
@@ -1092,13 +1104,14 @@ class GeocodeApp(tk.Tk):
             scroll_canvas.itemconfigure(root_window, width=event.width)
 
         def on_mousewheel(event: tk.Event) -> None:
+            self._dismiss_open_dropdowns()
             scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
         root.bind("<Configure>", update_scroll_region)
         scroll_canvas.bind("<Configure>", update_root_width)
         scroll_canvas.bind_all("<MouseWheel>", on_mousewheel)
-        scroll_canvas.bind_all("<Button-4>", lambda _event: scroll_canvas.yview_scroll(-1, "units"))
-        scroll_canvas.bind_all("<Button-5>", lambda _event: scroll_canvas.yview_scroll(1, "units"))
+        scroll_canvas.bind_all("<Button-4>", lambda _event: (self._dismiss_open_dropdowns(), scroll_canvas.yview_scroll(-1, "units")))
+        scroll_canvas.bind_all("<Button-5>", lambda _event: (self._dismiss_open_dropdowns(), scroll_canvas.yview_scroll(1, "units")))
 
         hero = tk.Canvas(root, height=88, highlightthickness=0, bg="#171a2e")
         hero.pack(fill="x", pady=(0, 12))
@@ -1191,6 +1204,27 @@ class GeocodeApp(tk.Tk):
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
         self._refresh_controls()
+
+    def _dismiss_open_dropdowns(self) -> None:
+        """Скрывает раскрытые списки перед прокруткой основного окна."""
+
+        def iter_widgets(widget: tk.Widget) -> Iterator[tk.Widget]:
+            yield widget
+            for child in widget.winfo_children():
+                yield from iter_widgets(child)
+
+        for widget in iter_widgets(self):
+            if isinstance(widget, ttk.Combobox):
+                try:
+                    self.tk.call("ttk::combobox::Unpost", str(widget))
+                except tk.TclError:
+                    try:
+                        widget.event_generate("<Escape>")
+                    except tk.TclError:
+                        pass
+            elif isinstance(widget, CheckColumnDropdown):
+                widget.dismiss_menu()
+        self.focus_set()
 
     def _bind_settings_auto_reload(self) -> None:
         """Обновляет предпросмотр при ручном изменении настроек чтения файла."""
