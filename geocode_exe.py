@@ -22,6 +22,7 @@ import json
 import math
 import re
 import ssl
+import sys
 import time
 import threading
 import tkinter as tk
@@ -63,6 +64,7 @@ S2_TILE_CENTER_LAT_COLUMN = "Широта центра тайла"
 S2_TILE_CENTER_LON_COLUMN = "Долгота центра тайла"
 S2_TILE_SIZE_COLUMN = "Размер тайла"
 S2_RESULT_COLUMNS = [S2_TILE_ID_COLUMN, S2_TILE_CENTER_LAT_COLUMN, S2_TILE_CENTER_LON_COLUMN]
+CSV_FIELD_SIZE_LIMIT = sys.maxsize
 MAX_ADDRESS_QUERY_LENGTH = 300
 FILE_TYPES = [
     ("Табличные файлы", "*.xlsx *.xlsm *.csv *.txt"),
@@ -246,6 +248,7 @@ def read_delimited(
     has_header: bool = True,
     start_row: int = 1,
 ) -> TableData:
+    ensure_csv_field_size_limit()
     raw = path.read_text(encoding=encoding, errors="replace")
     lines = raw.splitlines()[max(start_row - 1, 0) :]
     if not lines:
@@ -275,6 +278,17 @@ def read_delimited(
         rows.append(row)
     return TableData(headers=headers, rows=rows)
 
+
+
+def ensure_csv_field_size_limit() -> None:
+    """Allow CSV/TXT cells with large geometries, such as WKT polygons."""
+    limit = CSV_FIELD_SIZE_LIMIT
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
 
 
 def _unique_headers(headers: list[str]) -> list[str]:
