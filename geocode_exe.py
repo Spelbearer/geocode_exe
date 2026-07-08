@@ -35,6 +35,11 @@ from typing import Any, Callable, Iterator
 
 openpyxl = importlib.import_module("openpyxl") if importlib.util.find_spec("openpyxl") else None
 s2sphere = importlib.import_module("s2sphere") if importlib.util.find_spec("s2sphere") else None
+shapely_wkt = importlib.import_module("shapely.wkt") if importlib.util.find_spec("shapely") else None
+shapely_geometry = importlib.import_module("shapely.geometry") if importlib.util.find_spec("shapely") else None
+shapely_ops = importlib.import_module("shapely.ops") if importlib.util.find_spec("shapely") else None
+pyproj = importlib.import_module("pyproj") if importlib.util.find_spec("pyproj") else None
+pandas = importlib.import_module("pandas") if importlib.util.find_spec("pandas") else None
 
 DEFAULT_FORWARD_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/suggest/address"
 DEFAULT_REVERSE_URL = "https://dadata.t2.ru/suggestions/api/4_1/rs/geolocate/address"
@@ -67,12 +72,26 @@ S2_RESULT_COLUMNS = [S2_TILE_ID_COLUMN, S2_TILE_CENTER_LAT_COLUMN, S2_TILE_CENTE
 CSV_FIELD_SIZE_LIMIT = sys.maxsize
 MAX_ADDRESS_QUERY_LENGTH = 300
 FILE_TYPES = [
-    ("Табличные файлы", "*.xlsx *.xlsm *.csv *.txt"),
-    ("Excel", "*.xlsx *.xlsm"),
+    ("Табличные файлы", "*.xlsx *.xlsm *.xls *.csv *.txt"),
+    ("Excel", "*.xlsx *.xlsm *.xls"),
     ("CSV", "*.csv"),
     ("TXT", "*.txt"),
     ("Все файлы", "*.*"),
 ]
+TERRITORY_POLYGON_DIR = Path(r"C:\Users\danila.kondratyev.T2RU\Desktop\Полигоны для проги")
+TERRITORY_FILE_BY_TYPE = {
+    "Административные районы": "ADM",
+    "Геоюнит": "GEO",
+    "Населенный пункт": "LOC",
+}
+TERRITORY_OUTPUT_COLUMNS = {
+    "Административные районы": ["ADMIN_REGION_ID", "ADMIN_REGION_NAME", "MACROREGION_NAME", "REGION_NAME", "POP_LOC"],
+    "Геоюнит": ["GEOUNIT_ID", "GEOUNIT_NAME", "POP_LOC"],
+    "Населенный пункт": ["LOCATION_ID", "LOCATION_NAME", "MACROREGION_NAME", "REGION_NAME", "POP_LOC"],
+}
+TERRITORY_REQUIRED_COMMON_COLUMNS = ["POP_LOC", "POLY_POSITION", "MIN_LON", "MAX_LON", "MIN_LAT", "MAX_LAT", "CENTROID_POLY"]
+LANDING_STATUSES = {"in": "IN_POLYGON", "buffer": "BY_BUFFER", "not_found": "NOT_FOUND", "invalid": "INVALID_COORDINATES"}
+
 POLYGON_FILE_TYPES = [
     ("CSV/TXT координаты", "*.csv *.txt"),
     ("CSV", "*.csv"),
@@ -103,6 +122,17 @@ class PolygonData:
     name: str
     rings: list[list[tuple[float, float]]]
     source_row: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class TerritoryPolygon:
+    row: dict[str, Any]
+    geometry: Any
+    centroid: Any
+    min_lon: float
+    max_lon: float
+    min_lat: float
+    max_lat: float
 
 
 @dataclass(slots=True)
@@ -233,7 +263,7 @@ def read_table(
 ) -> TableData:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
-    if suffix in {".xlsx", ".xlsm"}:
+    if suffix in {".xlsx", ".xlsm", ".xls"}:
         return read_excel(file_path, sheet_name=sheet_name, has_header=has_header, start_row=start_row)
     if suffix in {".csv", ".txt"}:
         return read_delimited(file_path, delimiter=delimiter, encoding=encoding, has_header=has_header, start_row=start_row)
@@ -270,7 +300,7 @@ def read_delimited(
         data_rows = values[1:]
     else:
         width = max(len(row) for row in values)
-        headers = _unique_headers([f"Столбец {index}" for index in range(1, width + 1)])
+        headers = _unique_headers([f"column{index}" for index in range(1, width + 1)])
         data_rows = values
     rows = []
     for source_row in data_rows:
@@ -295,7 +325,7 @@ def _unique_headers(headers: list[str]) -> list[str]:
     result: list[str] = []
     counts: dict[str, int] = {}
     for index, header in enumerate(headers, start=1):
-        base = header.strip() or f"Столбец {index}"
+        base = header.strip() or f"column{index}"
         count = counts.get(base, 0) + 1
         counts[base] = count
         result.append(base if count == 1 else f"{base} ({count})")
@@ -303,6 +333,21 @@ def _unique_headers(headers: list[str]) -> list[str]:
 
 
 def read_excel(path: Path, *, sheet_name: str = "", has_header: bool = True, start_row: int = 1) -> TableData:
+    if path.suffix.lower() == ".xls":
+        if pandas is None:
+            raise ValueError("Для чтения .xls нужен пакет pandas с xlrd. Установите зависимости или сохраните файл как .xlsx/.csv.")
+        frame = pandas.read_excel(path, sheet_name=sheet_name or 0, header=None, dtype=object)
+        values = [tuple("" if pandas.isna(value) else value for value in row) for row in frame.iloc[max(start_row - 1, 0) :].to_numpy()]
+        if not values:
+            return TableData(headers=[], rows=[])
+        if has_header:
+            headers = _unique_headers([str(value or "") for value in values[0]])
+            data_rows = values[1:]
+        else:
+            width = max(len(row) for row in values)
+            headers = _unique_headers([f"column{index}" for index in range(1, width + 1)])
+            data_rows = values
+        return TableData(headers=headers, rows=[{header: row[index] if index < len(row) else "" for index, header in enumerate(headers)} for row in data_rows])
     if openpyxl is None:
         raise ValueError("Для Excel нужен пакет openpyxl. Для EXE он должен быть установлен перед сборкой.")
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -315,7 +360,7 @@ def read_excel(path: Path, *, sheet_name: str = "", has_header: bool = True, sta
         data_rows = values[1:]
     else:
         width = max(len(row) for row in values)
-        headers = _unique_headers([f"Столбец {index}" for index in range(1, width + 1)])
+        headers = _unique_headers([f"column{index}" for index in range(1, width + 1)])
         data_rows = values
     rows = []
     for source_row in data_rows:
@@ -711,6 +756,169 @@ def _s2_cell_center_strictly_inside_polygon(cell_id: Any, polygon: PolygonData) 
     center = s2sphere.LatLng.from_point(cell.get_center())
     return point_strictly_in_polygon(center.lng().degrees, center.lat().degrees, polygon)
 
+
+def territory_polygon_path(territory_type: str) -> Path:
+    base_name = TERRITORY_FILE_BY_TYPE[territory_type]
+    for suffix in ("", ".csv", ".txt"):
+        candidate = TERRITORY_POLYGON_DIR / f"{base_name}{suffix}"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"Файл полигонов {base_name} не найден в директории {TERRITORY_POLYGON_DIR}")
+
+
+def parse_point_coordinates_from_wkt(value: Any) -> tuple[float, float] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if shapely_wkt is not None:
+        try:
+            geometry = shapely_wkt.loads(text)
+            if geometry.geom_type.upper() == "POINT":
+                return float(geometry.x), float(geometry.y)
+        except Exception:
+            return None
+    match = re.match(r"^\s*(?:SRID=\d+;)?POINT\s*\(\s*([+-]?\d+(?:[.,]\d+)?)\s+([+-]?\d+(?:[.,]\d+)?)\s*\)\s*$", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    lon = _parse_float(match.group(1))
+    lat = _parse_float(match.group(2))
+    return (lon, lat) if lon is not None and lat is not None else None
+
+
+def load_territory_polygons(territory_type: str, pop_from: float | None = None, pop_to: float | None = None) -> list[TerritoryPolygon]:
+    if shapely_wkt is None:
+        raise ValueError("Для приземления в полигоны нужен пакет shapely.")
+    path = territory_polygon_path(territory_type)
+    table = read_delimited(path, delimiter=";", encoding="utf-8-sig", has_header=True, start_row=1)
+    required = TERRITORY_REQUIRED_COMMON_COLUMNS + [column for column in TERRITORY_OUTPUT_COLUMNS[territory_type] if column != "POP_LOC"]
+    missing = [column for column in required if column not in table.headers]
+    if missing:
+        raise ValueError(f"В файле {path.name} отсутствуют обязательные поля: {', '.join(missing)}")
+    polygons: list[TerritoryPolygon] = []
+    for row in table.rows:
+        population = _parse_float(row.get("POP_LOC", ""))
+        if pop_from is not None and (population is None or population < pop_from):
+            continue
+        if pop_to is not None and (population is None or population > pop_to):
+            continue
+        min_lon = _parse_float(row.get("MIN_LON"))
+        max_lon = _parse_float(row.get("MAX_LON"))
+        min_lat = _parse_float(row.get("MIN_LAT"))
+        max_lat = _parse_float(row.get("MAX_LAT"))
+        if None in (min_lon, max_lon, min_lat, max_lat):
+            continue
+        try:
+            geometry = shapely_wkt.loads(str(row.get("POLY_POSITION", "") or ""))
+            centroid = shapely_wkt.loads(str(row.get("CENTROID_POLY", "") or ""))
+        except Exception:
+            continue
+        polygons.append(TerritoryPolygon(row=row, geometry=geometry, centroid=centroid, min_lon=min_lon, max_lon=max_lon, min_lat=min_lat, max_lat=max_lat))
+    return polygons
+
+
+def local_metric_transformers(lon: float, lat: float) -> tuple[Any, Any]:
+    if pyproj is None:
+        raise ValueError("Для метрических буферов и расстояний нужен пакет pyproj.")
+    crs_wgs84 = pyproj.CRS.from_epsg(4326)
+    crs_local = pyproj.CRS.from_proj4(f"+proj=aeqd +lat_0={lat} +lon_0={lon} +units=m +datum=WGS84 +no_defs")
+    to_local = pyproj.Transformer.from_crs(crs_wgs84, crs_local, always_xy=True).transform
+    to_wgs84 = pyproj.Transformer.from_crs(crs_local, crs_wgs84, always_xy=True).transform
+    return to_local, to_wgs84
+
+
+def metric_distance_m(point: Any, geometry: Any, origin_lon: float, origin_lat: float) -> float:
+    if shapely_ops is None:
+        return haversine_meters(origin_lon, origin_lat, getattr(geometry, "x", origin_lon), getattr(geometry, "y", origin_lat))
+    to_local, _to_wgs84 = local_metric_transformers(origin_lon, origin_lat)
+    return float(shapely_ops.transform(to_local, point).distance(shapely_ops.transform(to_local, geometry)))
+
+
+def haversine_meters(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    radius = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * radius * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def process_coordinate_landing(
+    table: TableData,
+    *,
+    coordinate_format: str,
+    wkt_column: str = "",
+    lon_column: str = "",
+    lat_column: str = "",
+    territory_type: str,
+    use_buffer: bool = False,
+    buffer_km: float = 0.0,
+    pop_from: float | None = None,
+    pop_to: float | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> TableData:
+    if shapely_geometry is None or shapely_ops is None:
+        raise ValueError("Для приземления в полигоны нужны пакеты shapely и pyproj.")
+    territories = load_territory_polygons(territory_type, pop_from, pop_to)
+    result = table.copy()
+    output_columns = TERRITORY_OUTPUT_COLUMNS[territory_type] + ["distance_to_centroid_m", "landing_status"]
+    for column in output_columns:
+        if column not in result.headers:
+            result.headers.append(column)
+    total = len(result.rows)
+    landed_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(result.rows, start=1):
+        coords = parse_point_coordinates_from_wkt(row.get(wkt_column, "")) if coordinate_format == "WKT" else (_parse_float(row.get(lon_column, "")), _parse_float(row.get(lat_column, "")))
+        if not coords or coords[0] is None or coords[1] is None:
+            _fill_landing_row(row, output_columns, "INVALID_COORDINATES")
+            landed_rows.append(row)
+            if progress:
+                progress(index, total, "INVALID_COORDINATES")
+            continue
+        lon, lat = float(coords[0]), float(coords[1])
+        point = shapely_geometry.Point(lon, lat)
+        bbox_candidates = [territory for territory in territories if territory.min_lon <= lon <= territory.max_lon and territory.min_lat <= lat <= territory.max_lat]
+        matches = [territory for territory in bbox_candidates if territory.geometry.contains(point) or territory.geometry.intersects(point)]
+        status = "IN_POLYGON"
+        if not matches and use_buffer and buffer_km > 0:
+            to_local, to_wgs84 = local_metric_transformers(lon, lat)
+            metric_point = shapely_ops.transform(to_local, point)
+            metric_buffer = metric_point.buffer(buffer_km * 1000)
+            buffer_geometry = shapely_ops.transform(to_wgs84, metric_buffer)
+            minx, miny, maxx, maxy = buffer_geometry.bounds
+            buffer_candidates = [territory for territory in territories if territory.max_lon >= minx and territory.min_lon <= maxx and territory.max_lat >= miny and territory.min_lat <= maxy]
+            matches = [territory for territory in buffer_candidates if territory.geometry.intersects(buffer_geometry)]
+            status = "BY_BUFFER"
+        if not matches:
+            _fill_landing_row(row, output_columns, "NOT_FOUND")
+            landed_rows.append(row)
+        elif status == "BY_BUFFER":
+            for territory in matches:
+                buffer_row = row.copy()
+                _fill_landing_row(buffer_row, output_columns, status, territory, point, lon, lat)
+                landed_rows.append(buffer_row)
+        else:
+            best = min(matches, key=lambda territory: metric_distance_m(point, territory.centroid, lon, lat))
+            _fill_landing_row(row, output_columns, status, best, point, lon, lat)
+            landed_rows.append(row)
+        if progress:
+            progress(index, total, f"{lon}, {lat}")
+    result.rows = landed_rows
+    return result
+
+
+def _fill_landing_row(row: dict[str, Any], output_columns: list[str], status: str, territory: TerritoryPolygon | None = None, point: Any | None = None, lon: float = 0.0, lat: float = 0.0) -> None:
+    for column in output_columns:
+        row[column] = ""
+    row["landing_status"] = status
+    if territory is None or point is None:
+        return
+    for column in output_columns:
+        if column in territory.row:
+            row[column] = territory.row.get(column, "")
+    target_geometry = territory.centroid if status == "IN_POLYGON" else territory.geometry
+    row["distance_to_centroid_m"] = round(metric_distance_m(point, target_geometry, lon, lat), 2)
+    row["landing_status"] = status
+
 class RoundedField(tk.Frame):
     """Контейнер с мягкой скруглённой обводкой для полей выбора."""
 
@@ -1026,6 +1234,24 @@ class GeocodeApp(tk.Tk):
         self.polygon_lat_column = tk.StringVar()
         self.polygon_lon_column = tk.StringVar()
         self.polygon_wkt_column = tk.StringVar()
+        self.landing_source_file = tk.StringVar()
+        self.landing_output_file = tk.StringVar()
+        self.landing_delimiter = tk.StringVar(value=";")
+        self.landing_has_header = tk.BooleanVar(value=True)
+        self.landing_start_row = tk.IntVar(value=1)
+        self.landing_encoding = tk.StringVar(value="utf-8-sig")
+        self.landing_coord_format = tk.StringVar(value="lon/lat")
+        self.landing_wkt_column = tk.StringVar()
+        self.landing_lon_column = tk.StringVar()
+        self.landing_lat_column = tk.StringVar()
+        self.landing_processing_type = tk.StringVar(value="territory_landing")
+        self.landing_territory_type = tk.StringVar(value="Административные районы")
+        self.landing_use_buffer = tk.BooleanVar(value=False)
+        self.landing_buffer_km = tk.DoubleVar(value=1.0)
+        self.landing_pop_from = tk.StringVar()
+        self.landing_pop_to = tk.StringVar()
+        self.landing_status = tk.StringVar(value="Выберите входной файл с координатами")
+        self.landing_table_data: TableData | None = None
 
         self.s2_level = tk.StringVar(value=S2_LEVEL_LABELS[13])
         self.delimiter = tk.StringVar(value=";")
@@ -1040,6 +1266,7 @@ class GeocodeApp(tk.Tk):
         self.polygon_status = tk.StringVar(value="Загрузите файл полигона")
         self._geocode_reload_job: str | None = None
         self._polygon_preview_reload_job: str | None = None
+        self._landing_reload_job: str | None = None
 
         self._configure_style()
         self._build_ui()
@@ -1138,8 +1365,10 @@ class GeocodeApp(tk.Tk):
         self.notebook.pack(fill="both", expand=True)
         geocode_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         polygon_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
+        landing_root = ttk.Frame(self.notebook, padding=(0, 12, 0, 0))
         self.notebook.add(geocode_root, text="Геокодирование")
         self.notebook.add(polygon_root, text="Полигоны и S2")
+        self.notebook.add(landing_root, text="Приземление координат в полигоны")
 
 
         io = self._make_section(geocode_root, "Исходный файл и настройка вывода", fill="x")
@@ -1210,6 +1439,7 @@ class GeocodeApp(tk.Tk):
         self.progress.pack(side="top", fill="x", expand=True, pady=(6, 0))
 
         self._build_polygon_tab(polygon_root)
+        self._build_landing_tab(landing_root)
 
         table_frame = self._make_section(geocode_root, "Предпросмотр", padding=6, fill="both", expand=True)
         self.preview = ttk.Treeview(table_frame, show="headings")
@@ -1260,6 +1490,8 @@ class GeocodeApp(tk.Tk):
         self.start_row.trace_add("write", lambda *_args: self.schedule_geocode_reload())
         self.polygon_delimiter.trace_add("write", lambda *_args: self.schedule_polygon_preview_reload())
         self.polygon_start_row.trace_add("write", lambda *_args: self.schedule_polygon_preview_reload())
+        self.landing_delimiter.trace_add("write", lambda *_args: self.schedule_landing_reload())
+        self.landing_start_row.trace_add("write", lambda *_args: self.schedule_landing_reload())
 
     def schedule_geocode_reload(self) -> None:
         if self._geocode_reload_job is not None:
@@ -1294,6 +1526,85 @@ class GeocodeApp(tk.Tk):
         section.columnconfigure(0, weight=1)
         section.rowconfigure(1, weight=1)
         return content
+
+    def _build_landing_tab(self, root: tk.Widget) -> None:
+        io = self._make_section(root, "Настройка входного и выходного файла", fill="x")
+        io.columnconfigure(1, weight=1)
+        ttk.Label(io, text="Входной файл:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(io, textvariable=self.landing_source_file).grid(row=0, column=1, columnspan=4, sticky="ew", padx=6, pady=4)
+        RoundedButton(io, text="Выбрать", command=self.open_landing_file, bg="#222846", padx=12, pady=8, height=34).grid(row=0, column=5, sticky="ew", pady=4)
+        ttk.Label(io, text="Выходной файл:", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(io, textvariable=self.landing_output_file).grid(row=1, column=1, columnspan=4, sticky="ew", padx=6, pady=4)
+        RoundedButton(io, text="Выбрать", command=self.choose_landing_output_file, bg="#222846", padx=12, pady=8, height=34).grid(row=1, column=5, sticky="ew", pady=4)
+        ttk.Label(io, text="Разделитель:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        self.landing_delimiter_entry = ttk.Entry(io, textvariable=self.landing_delimiter, width=4)
+        self.landing_delimiter_entry.grid(row=2, column=1, sticky="w", padx=6, pady=4)
+        self.landing_header_check = ttk.Checkbutton(io, text="Наличие заголовка", variable=self.landing_has_header, command=self.reload_landing_file)
+        self.landing_header_check.grid(row=2, column=2, sticky="w", pady=4)
+        ttk.Label(io, text="Данные начинаются со строки:", style="Card.TLabel").grid(row=2, column=3, sticky="e", padx=(12, 6), pady=4)
+        self.landing_start_row_spinbox = ttk.Spinbox(io, from_=1, to=9999, textvariable=self.landing_start_row, width=SPINBOX_WIDTH, command=self.reload_landing_file)
+        self._block_widget_mousewheel(self.landing_start_row_spinbox)
+        self.landing_start_row_spinbox.grid(row=2, column=4, sticky="w", pady=4)
+        ttk.Label(io, text="Кодировка:", style="Card.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        self.landing_encoding_radios = [
+            RoundedRadio(io, text="UTF-8", variable=self.landing_encoding, value="utf-8-sig", command=self.reload_landing_file),
+            RoundedRadio(io, text="CP1251", variable=self.landing_encoding, value="cp1251", command=self.reload_landing_file),
+        ]
+        self.landing_encoding_radios[0].grid(row=3, column=1, sticky="w", padx=(6, 0), pady=4)
+        self.landing_encoding_radios[1].grid(row=3, column=2, sticky="w", pady=4)
+
+        coords = self._make_section(root, "Формат координат", fill="x", pady=12)
+        RoundedRadio(coords, text="WKT", variable=self.landing_coord_format, value="WKT", command=self._refresh_landing_coord_controls).grid(row=0, column=0, sticky="w")
+        RoundedRadio(coords, text="lon/lat", variable=self.landing_coord_format, value="lon/lat", command=self._refresh_landing_coord_controls).grid(row=0, column=1, sticky="w", padx=20)
+        ttk.Label(coords, text="WKT-колонка", style="Card.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        self.landing_wkt_combo = ttk.Combobox(coords, textvariable=self.landing_wkt_column, state="disabled", width=30)
+        self.landing_wkt_combo.grid(row=2, column=0, sticky="ew", pady=4)
+        ttk.Label(coords, text="Долгота", style="Card.TLabel").grid(row=1, column=1, sticky="w", pady=(10, 0))
+        self.landing_lon_combo = ttk.Combobox(coords, textvariable=self.landing_lon_column, state="disabled", width=24)
+        self.landing_lon_combo.grid(row=2, column=1, sticky="ew", pady=4, padx=(20, 0))
+        ttk.Label(coords, text="Широта", style="Card.TLabel").grid(row=1, column=2, sticky="w", pady=(10, 0))
+        self.landing_lat_combo = ttk.Combobox(coords, textvariable=self.landing_lat_column, state="disabled", width=24)
+        self.landing_lat_combo.grid(row=2, column=2, sticky="ew", pady=4, padx=(20, 0))
+
+        processing = self._make_section(root, "Выбор обработки данных", fill="x", pady=(0, 12))
+        ttk.Radiobutton(processing, text="Приземление в территории", variable=self.landing_processing_type, value="territory_landing").grid(row=0, column=0, sticky="w")
+
+        territory = self._make_section(root, "Приземление в территории", fill="x")
+        ttk.Label(territory, text="Тип полигона:", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        self.landing_territory_combo = ttk.Combobox(territory, textvariable=self.landing_territory_type, values=list(TERRITORY_FILE_BY_TYPE), state="readonly", width=30)
+        self.landing_territory_combo.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        ttk.Checkbutton(territory, text="Использовать буфер поиска вокруг точки", variable=self.landing_use_buffer, command=self._refresh_landing_buffer_controls).grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Label(territory, text="Размер буфера, км:", style="Card.TLabel").grid(row=1, column=2, sticky="e", padx=(20, 6), pady=4)
+        self.landing_buffer_spinbox = ttk.Spinbox(territory, from_=0.1, to=1000, increment=0.1, textvariable=self.landing_buffer_km, width=SPINBOX_WIDTH)
+        self.landing_buffer_spinbox.grid(row=1, column=3, sticky="w", pady=4)
+        ttk.Label(territory, text="Население от:", style="Card.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(territory, textvariable=self.landing_pop_from, width=16).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(territory, text="Население до:", style="Card.TLabel").grid(row=2, column=2, sticky="e", padx=(20, 6), pady=4)
+        ttk.Entry(territory, textvariable=self.landing_pop_to, width=16).grid(row=2, column=3, sticky="w", pady=4)
+
+        action_row = ttk.Frame(root)
+        action_row.pack(fill="x", pady=(12, 8))
+        self.landing_start_button = RoundedButton(action_row, text="Запустить приземление", command=self.start_landing_processing, bg="#171a2e")
+        self.landing_start_button.pack(side="left")
+        status_panel = ttk.Frame(action_row, style="Status.TFrame", padding=(12, 8))
+        status_panel.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self.landing_progress_label = ttk.Label(status_panel, text="0%", style="Status.TLabel", width=5, anchor="center")
+        self.landing_progress_label.pack(side="right", padx=(10, 0))
+        ttk.Label(status_panel, textvariable=self.landing_status, style="Status.TLabel").pack(side="top", anchor="w", fill="x")
+        self.landing_progress = ttk.Progressbar(status_panel, mode="determinate", style="Horizontal.TProgressbar")
+        self.landing_progress.pack(side="top", fill="x", expand=True, pady=(6, 0))
+
+        table_frame = self._make_section(root, "Предпросмотр входного файла", padding=6, fill="both", expand=True)
+        self.landing_preview = ttk.Treeview(table_frame, show="headings")
+        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.landing_preview.yview)
+        xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.landing_preview.xview)
+        self.landing_preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.landing_preview.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+        self._refresh_landing_buffer_controls()
 
     def _build_polygon_tab(self, root: tk.Widget) -> None:
         polygon_io = self._make_section(root, "Генерация S2-тайлов по загружаемым полигонам", fill="x")
@@ -1490,6 +1801,128 @@ class GeocodeApp(tk.Tk):
         self.refresh_polygon_preview(show_errors=False)
         self.polygon_status.set(f"Проверено полигонов: {len(polygons)}. Файл сохранён: {self.polygon_output_file.get().strip()}")
 
+    def open_landing_file(self) -> None:
+        filename = filedialog.askopenfilename(filetypes=FILE_TYPES)
+        if filename:
+            self.landing_source_file.set(filename)
+            self._refresh_file_format_controls(Path(filename), target="landing")
+            self.reload_landing_file()
+
+    def choose_landing_output_file(self) -> None:
+        filename = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=FILE_TYPES)
+        if filename:
+            self.landing_output_file.set(filename)
+
+    def schedule_landing_reload(self) -> None:
+        if self._landing_reload_job is not None:
+            self.after_cancel(self._landing_reload_job)
+        self._landing_reload_job = self.after(SETTINGS_RELOAD_DELAY_MS, self._run_scheduled_landing_reload)
+
+    def _run_scheduled_landing_reload(self) -> None:
+        self._landing_reload_job = None
+        if self.landing_source_file.get().strip():
+            self.reload_landing_file(show_errors=False)
+
+    def reload_landing_file(self, *, show_errors: bool = True) -> None:
+        filename = self.landing_source_file.get().strip()
+        if not filename:
+            return
+        try:
+            self.landing_table_data = read_table(
+                filename,
+                delimiter=self.landing_delimiter.get() or None,
+                encoding=self.landing_encoding.get(),
+                has_header=self.landing_has_header.get(),
+                start_row=max(int(self.landing_start_row.get()), 1),
+            )
+        except Exception as exc:
+            if show_errors:
+                messagebox.showerror("Ошибка открытия файла", str(exc))
+            return
+        self._refresh_file_format_controls(Path(filename), target="landing")
+        self._fill_landing_columns()
+        self._show_table(self.landing_preview, self.landing_table_data)
+        self.landing_status.set(f"Загружено строк: {len(self.landing_table_data.rows)}")
+
+    def _fill_landing_columns(self) -> None:
+        if self.landing_table_data is None:
+            return
+        columns = self.landing_table_data.headers
+        for combo in (self.landing_wkt_combo, self.landing_lon_combo, self.landing_lat_combo):
+            combo.configure(values=columns)
+        self.landing_wkt_column.set(guess_column(columns, ["geometry_wkt", "geometry", "wkt", "point", "position", "bs_position", "bs_pos", "координаты", "геометрия"]))
+        self.landing_lon_column.set(guess_column(columns, ["coord_lon", "geo_lon", "longitude", "lon", "lng", "долгота", "x"]))
+        self.landing_lat_column.set(guess_column(columns, ["coord_lat", "geo_lat", "latitude", "lat", "широта", "y"]))
+        self._refresh_landing_coord_controls()
+
+    def _refresh_landing_coord_controls(self) -> None:
+        wkt_mode = self.landing_coord_format.get() == "WKT"
+        has_columns = bool(self.landing_table_data and self.landing_table_data.headers)
+        self.landing_wkt_combo.configure(state="readonly" if wkt_mode and has_columns else "disabled")
+        self.landing_lon_combo.configure(state="readonly" if not wkt_mode and has_columns else "disabled")
+        self.landing_lat_combo.configure(state="readonly" if not wkt_mode and has_columns else "disabled")
+
+    def _refresh_landing_buffer_controls(self) -> None:
+        if hasattr(self, "landing_buffer_spinbox"):
+            self.landing_buffer_spinbox.configure(state="normal" if self.landing_use_buffer.get() else "disabled")
+
+    def start_landing_processing(self) -> None:
+        if not self.landing_source_file.get().strip():
+            messagebox.showwarning("Нет входного файла", "Выберите входной файл с координатами.")
+            return
+        if self.landing_table_data is None:
+            self.reload_landing_file()
+        if self.landing_table_data is None:
+            return
+        if not self.landing_table_data.rows:
+            messagebox.showwarning("Нет данных", "Во входном файле нет данных.")
+            return
+        if not self.landing_output_file.get().strip():
+            messagebox.showwarning("Нет выходного файла", "Выберите путь для сохранения результата.")
+            return
+        if self.landing_coord_format.get() == "WKT" and not self.landing_wkt_column.get():
+            messagebox.showwarning("Нет колонки координат", "Выберите WKT-колонку.")
+            return
+        if self.landing_coord_format.get() != "WKT" and (not self.landing_lon_column.get() or not self.landing_lat_column.get()):
+            messagebox.showwarning("Нет колонок координат", "Выберите колонки долготы и широты.")
+            return
+        self.landing_start_button.config(state="disabled")
+        self.landing_progress.configure(maximum=max(len(self.landing_table_data.rows), 1), value=0)
+        self.landing_progress_label.configure(text="0%")
+        self.landing_status.set("Приземление координат...")
+        threading.Thread(target=self._process_landing_in_thread, daemon=True).start()
+
+    def _process_landing_in_thread(self) -> None:
+        assert self.landing_table_data is not None
+        try:
+            pop_from = _parse_float(self.landing_pop_from.get())
+            pop_to = _parse_float(self.landing_pop_to.get())
+            buffer_km = float(self.landing_buffer_km.get() or 0)
+
+            def progress(current: int, total: int, label: str) -> None:
+                self._add_worker_event("landing_progress", (current, total, label))
+
+            result = process_coordinate_landing(
+                self.landing_table_data,
+                coordinate_format=self.landing_coord_format.get(),
+                wkt_column=self.landing_wkt_column.get(),
+                lon_column=self.landing_lon_column.get(),
+                lat_column=self.landing_lat_column.get(),
+                territory_type=self.landing_territory_type.get(),
+                use_buffer=self.landing_use_buffer.get(),
+                buffer_km=buffer_km,
+                pop_from=pop_from,
+                pop_to=pop_to,
+                progress=progress,
+            )
+            write_table(result, self.landing_output_file.get().strip())
+        except FileNotFoundError as exc:
+            self._add_worker_event("landing_error", str(exc))
+        except Exception as exc:
+            self._add_worker_event("landing_error", str(exc))
+        else:
+            self._add_worker_event("landing_done", result)
+
     def open_file(self) -> None:
         filename = filedialog.askopenfilename(filetypes=FILE_TYPES)
         if not filename:
@@ -1543,6 +1976,13 @@ class GeocodeApp(tk.Tk):
             if hasattr(self, "polygon_delimiter_entry"):
                 self.polygon_delimiter_entry.configure(state=delimiter_state)
             for radio in getattr(self, "polygon_encoding_radios", []):
+                radio.button.configure(state=encoding_state)
+            return
+        if target == "landing":
+            if hasattr(self, "landing_delimiter_entry"):
+                self.landing_delimiter_entry.configure(state=delimiter_state)
+                self.landing_header_check.configure(state="normal" if delimited_file or not excel_file else "disabled")
+            for radio in getattr(self, "landing_encoding_radios", []):
                 radio.button.configure(state=encoding_state)
             return
         self.delimiter_entry.configure(state=delimiter_state)
@@ -1659,6 +2099,23 @@ class GeocodeApp(tk.Tk):
                 self.polygon_progress.configure(value=self.polygon_progress.cget("maximum"))
                 self.polygon_progress_label.configure(text="100%")
                 self.polygon_status.set(f"Сформировано S2-тайлов: {len(self.result_data.rows)}. Файл сохранён: {self.polygon_output_file.get().strip()}")
+            elif event == "landing_progress":
+                current, total, label = payload
+                self.landing_progress.configure(maximum=max(total, 1), value=current)
+                percent = int(current / max(total, 1) * 100)
+                self.landing_progress_label.configure(text=f"{percent}%")
+                self.landing_status.set(f"Приземление {current}/{total}: {label}")
+            elif event == "landing_error":
+                self.landing_start_button.config(state="normal")
+                self.landing_progress_label.configure(text="Ошибка")
+                messagebox.showerror("Ошибка приземления", str(payload))
+                self.landing_status.set(f"Приземление остановлено: {payload}")
+            elif event == "landing_done":
+                self.landing_start_button.config(state="normal")
+                self.result_data = payload
+                self.landing_progress.configure(value=self.landing_progress.cget("maximum"))
+                self.landing_progress_label.configure(text="100%")
+                self.landing_status.set(f"Приземление завершено. Обработано строк: {len(payload.rows)}. Файл сохранён: {self.landing_output_file.get().strip()}")
         self.after(150, self._poll_worker_events)
 
     def _fill_columns(self) -> None:
