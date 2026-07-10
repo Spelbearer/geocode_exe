@@ -193,6 +193,15 @@ GEOCODER_OUTPUT_FIELDS: list[tuple[str, str]] = [
     ("Общий код качества распознавания адреса", "qc"),
 ]
 GEOCODER_OUTPUT_FIELD_KEYS = dict(GEOCODER_OUTPUT_FIELDS)
+GEOCODER_OUTPUT_FIELD_DESCRIPTIONS = {key: label for label, key in GEOCODER_OUTPUT_FIELDS}
+GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY = {
+    key: f"{key} — {label}" for label, key in GEOCODER_OUTPUT_FIELDS
+}
+GEOCODER_OUTPUT_FIELD_KEY_BY_DISPLAY = {
+    display: key for key, display in GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY.items()
+}
+GEOCODER_OUTPUT_FIELD_KEY_BY_DESCRIPTION = {label: key for label, key in GEOCODER_OUTPUT_FIELDS}
+
 
 POLYGON_FILE_TYPES = [
     ("CSV/TXT координаты", "*.csv *.txt"),
@@ -518,17 +527,39 @@ def _format_geocoder_value(value: Any) -> str:
     return str(value)
 
 
+def normalize_geocoder_output_field(field: str) -> str | None:
+    """Возвращает техническое имя поля DaData по пункту из выпадающего списка."""
+    field = str(field or "").strip()
+    if not field:
+        return None
+    if field in GEOCODER_OUTPUT_FIELD_DESCRIPTIONS:
+        return field
+    if field in GEOCODER_OUTPUT_FIELD_KEY_BY_DISPLAY:
+        return GEOCODER_OUTPUT_FIELD_KEY_BY_DISPLAY[field]
+    return GEOCODER_OUTPUT_FIELD_KEY_BY_DESCRIPTION.get(field)
+
+
+def normalize_geocoder_output_fields(selected_fields: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for field in selected_fields or []:
+        key = normalize_geocoder_output_field(field)
+        if key and key not in seen:
+            normalized.append(key)
+            seen.add(key)
+    return normalized
+
+
 def extract_geocoder_output_fields(details: dict[str, Any], selected_fields: list[str]) -> dict[str, str]:
     return {
-        field: _format_geocoder_value(details.get(GEOCODER_OUTPUT_FIELD_KEYS[field]))
-        for field in selected_fields
-        if field in GEOCODER_OUTPUT_FIELD_KEYS
+        key: _format_geocoder_value(details.get(key))
+        for key in normalize_geocoder_output_fields(selected_fields)
     }
 
 
 def append_result_columns(table: TableData, selected_fields: list[str] | None = None) -> TableData:
     result = table.copy()
-    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN, *(selected_fields or [])]:
+    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN, *normalize_geocoder_output_fields(selected_fields)]:
         if column not in result.headers:
             result.headers.append(column)
     return result
@@ -1553,7 +1584,7 @@ class GeocodeApp(tk.Tk):
         ttk.Label(settings, text="Поля в выходном файле", style="Card.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 0))
         self.output_fields_dropdown = CheckColumnDropdown(settings, self.output_fields_text)
         self.output_fields_dropdown.grid(row=4, column=0, columnspan=3, sticky="we", pady=(2, 0))
-        self.output_fields_dropdown.set_columns([label for label, _key in GEOCODER_OUTPUT_FIELDS], selected_by_default=False)
+        self.output_fields_dropdown.set_columns(list(GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY.values()), selected_by_default=False)
 
         settings.columnconfigure(0, weight=2)
         settings.columnconfigure(1, weight=1)
