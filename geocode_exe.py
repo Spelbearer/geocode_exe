@@ -194,9 +194,7 @@ GEOCODER_OUTPUT_FIELDS: list[tuple[str, str]] = [
 ]
 GEOCODER_OUTPUT_FIELD_KEYS = dict(GEOCODER_OUTPUT_FIELDS)
 GEOCODER_OUTPUT_FIELD_DESCRIPTIONS = {key: label for label, key in GEOCODER_OUTPUT_FIELDS}
-GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY = {
-    key: f"{key} — {label}" for label, key in GEOCODER_OUTPUT_FIELDS
-}
+GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY = {key: label for label, key in GEOCODER_OUTPUT_FIELDS}
 GEOCODER_OUTPUT_FIELD_KEY_BY_DISPLAY = {
     display: key for key, display in GEOCODER_OUTPUT_FIELD_DISPLAY_BY_KEY.items()
 }
@@ -550,16 +548,25 @@ def normalize_geocoder_output_fields(selected_fields: list[str] | None) -> list[
     return normalized
 
 
+def geocoder_output_column_name(field_key: str) -> str:
+    """Возвращает человекочитаемое название выходной колонки для поля DaData."""
+    return GEOCODER_OUTPUT_FIELD_DESCRIPTIONS.get(field_key, field_key)
+
+
+def normalize_geocoder_output_column_names(selected_fields: list[str] | None) -> list[str]:
+    return [geocoder_output_column_name(key) for key in normalize_geocoder_output_fields(selected_fields)]
+
+
 def extract_geocoder_output_fields(details: dict[str, Any], selected_fields: list[str]) -> dict[str, str]:
     return {
-        key: _format_geocoder_value(details.get(key))
+        geocoder_output_column_name(key): _format_geocoder_value(details.get(key))
         for key in normalize_geocoder_output_fields(selected_fields)
     }
 
 
 def append_result_columns(table: TableData, selected_fields: list[str] | None = None) -> TableData:
     result = table.copy()
-    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN, *normalize_geocoder_output_fields(selected_fields)]:
+    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN, *normalize_geocoder_output_column_names(selected_fields)]:
         if column not in result.headers:
             result.headers.append(column)
     return result
