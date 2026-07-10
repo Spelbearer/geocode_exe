@@ -47,6 +47,7 @@ DEFAULT_HTTP_HEADERS = {
     "Accept": "application/json",
     "Content-Type": "application/json; charset=utf-8",
     "User-Agent": "GeocodeEXE/1.0",
+    "Authorization": "a1b2ckalksd1e0abcdef"
 }
 RETRYABLE_HTTP_STATUSES = {502, 503, 504}
 RESULT_ADDRESS_COLUMN = "Найденный адрес"
