@@ -92,6 +92,108 @@ TERRITORY_OUTPUT_COLUMNS = {
 TERRITORY_REQUIRED_COMMON_COLUMNS = ["POP_LOC", "POLY_POSITION", "MIN_LON", "MAX_LON", "MIN_LAT", "MAX_LAT", "CENTROID_POLY"]
 LANDING_STATUSES = {"in": "IN_POLYGON", "buffer": "BY_BUFFER", "not_found": "NOT_FOUND", "invalid": "INVALID_COORDINATES"}
 
+GEOCODER_OUTPUT_FIELDS: list[tuple[str, str]] = [
+    ("Почтовый индекс адреса", "postal_code"),
+    ("Страна", "country"),
+    ("ISO-код страны (например RU)", "country_iso_code"),
+    ("Федеральный округ", "federal_district"),
+    ("ФИАС/ГАР ID региона", "region_fias_id"),
+    ("КЛАДР-код региона", "region_kladr_id"),
+    ("ISO-код региона", "region_iso_code"),
+    ("Регион с типом (например Республика Татарстан, г Москва)", "region_with_type"),
+    ("Краткий тип региона (например г, обл, Респ)", "region_type"),
+    ("Полный тип региона (например город, область, республика)", "region_type_full"),
+    ("Название региона без типа", "region"),
+    ("ФИАС/ГАР ID района внутри региона", "area_fias_id"),
+    ("КЛАДР-код района", "area_kladr_id"),
+    ("Район с типом (например Лаишевский р-н)", "area_with_type"),
+    ("Краткий тип района (например р-н)", "area_type"),
+    ("Полный тип района (например район)", "area_type_full"),
+    ("Название района без типа", "area"),
+    ("ФИАС/ГАР ID города", "city_fias_id"),
+    ("КЛАДР-код города", "city_kladr_id"),
+    ("Город с типом (например г Казань)", "city_with_type"),
+    ("Краткий тип города (например г)", "city_type"),
+    ("Полный тип города (например город)", "city_type_full"),
+    ("Название города без типа", "city"),
+    ("Административный округ/часть города, если есть", "city_area"),
+    ("ФИАС/ГАР ID района города", "city_district_fias_id"),
+    ("КЛАДР-код района города", "city_district_kladr_id"),
+    ("Район города с типом (например Советский р-н)", "city_district_with_type"),
+    ("Краткий тип района города", "city_district_type"),
+    ("Полный тип района города", "city_district_type_full"),
+    ("Название района города без типа", "city_district"),
+    ("ФИАС/ГАР ID населенного пункта", "settlement_fias_id"),
+    ("КЛАДР-код населенного пункта", "settlement_kladr_id"),
+    ("Населенный пункт с типом (например с Верхний Услон)", "settlement_with_type"),
+    ("Краткий тип населенного пункта (например с, п, д)", "settlement_type"),
+    ("Полный тип населенного пункта (село, поселок, деревня)", "settlement_type_full"),
+    ("Название населенного пункта без типа", "settlement"),
+    ("ФИАС/ГАР ID улицы", "street_fias_id"),
+    ("КЛАДР-код улицы", "street_kladr_id"),
+    ("Улица с типом (например ул Ленина)", "street_with_type"),
+    ("Краткий тип улицы (например ул, пр-кт, пер)", "street_type"),
+    ("Полный тип улицы (например улица, проспект, переулок)", "street_type_full"),
+    ("Название улицы без типа", "street"),
+    ("ФИАС/ГАР ID земельного участка", "stead_fias_id"),
+    ("Кадастровый номер земельного участка", "stead_cadnum"),
+    ("Краткий тип участка", "stead_type"),
+    ("Полный тип участка", "stead_type_full"),
+    ("Номер или название земельного участка", "stead"),
+    ("ФИАС/ГАР ID дома", "house_fias_id"),
+    ("КЛАДР-код дома", "house_kladr_id"),
+    ("Кадастровый номер дома", "house_cadnum"),
+    ("Количество квартир в доме, если известно", "flat_count"),
+    ("Краткий тип дома (например д)", "house_type"),
+    ("Полный тип дома (например дом)", "house_type_full"),
+    ("Номер дома", "house"),
+    ("Краткий тип корпуса/строения", "block_type"),
+    ("Полный тип корпуса/строения", "block_type_full"),
+    ("Номер корпуса, строения или литера", "block"),
+    ("Подъезд", "entrance"),
+    ("Этаж", "floor"),
+    ("ФИАС/ГАР ID квартиры", "flat_fias_id"),
+    ("Кадастровый номер квартиры", "flat_cadnum"),
+    ("Краткий тип помещения (например кв)", "flat_type"),
+    ("Полный тип помещения (например квартира)", "flat_type_full"),
+    ("Номер квартиры", "flat"),
+    ("Площадь квартиры, если доступна", "flat_area"),
+    ("Оценочная цена квадратного метра", "square_meter_price"),
+    ("Оценочная стоимость квартиры", "flat_price"),
+    ("ФИАС/ГАР ID комнаты", "room_fias_id"),
+    ("Кадастровый номер комнаты", "room_cadnum"),
+    ("Краткий тип комнаты", "room_type"),
+    ("Полный тип комнаты", "room_type_full"),
+    ("Номер комнаты", "room"),
+    ("Абонентский ящик", "postal_box"),
+    ("Основной ФИАС/ГАР ID найденного адресного объекта", "fias_id"),
+    ("Иерархический код ФИАС", "fias_code"),
+    ("Уровень адреса по ФИАС: регион, город, улица, дом и т.д.", "fias_level"),
+    ("Признак актуальности объекта в ФИАС/ГАР", "fias_actuality_state"),
+    ("Основной КЛАДР-код адреса", "kladr_id"),
+    ("ID объекта в GeoNames, чаще для зарубежных адресов", "geoname_id"),
+    ("Признак центра региона/района", "capital_marker"),
+    ("Код ОКАТО", "okato"),
+    ("Код ОКТМО", "oktmo"),
+    ("Код налоговой инспекции для физлиц", "tax_office"),
+    ("Код налоговой инспекции для юрлиц", "tax_office_legal"),
+    ("Часовой пояс адреса", "timezone"),
+    ("Широта найденного адреса", "geo_lat"),
+    ("Долгота найденного адреса", "geo_lon"),
+    ("Признак нахождения внутри/снаружи МКАД или КАД", "beltway_hit"),
+    ("Расстояние до МКАД/КАД, если применимо", "beltway_distance"),
+    ("Ближайшие станции метро, если доступны", "metro"),
+    ("Административное/муниципальное деление адреса", "divisions"),
+    ("Код точности координат", "qc_geo"),
+    ("Код полноты распознавания адреса", "qc_complete"),
+    ("Код качества распознавания дома", "qc_house"),
+    ("Старые или альтернативные значения адреса", "history_values"),
+    ("Часть адреса, которую не удалось разобрать", "unparsed_parts"),
+    ("Исходная строка адреса до обработки", "source"),
+    ("Общий код качества распознавания адреса", "qc"),
+]
+GEOCODER_OUTPUT_FIELD_KEYS = dict(GEOCODER_OUTPUT_FIELDS)
+
 POLYGON_FILE_TYPES = [
     ("CSV/TXT координаты", "*.csv *.txt"),
     ("CSV", "*.csv"),
@@ -144,7 +246,7 @@ class GeocodingClient:
     retry_count: int = 3
     retry_delay: float = 1.0
 
-    def geocode_address(self, address: str) -> dict[str, str]:
+    def geocode_address(self, address: str, selected_fields: list[str] | None = None) -> dict[str, str]:
         address = _prepare_address_query(address)
         if not address:
             return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: "", RESULT_LON_COLUMN: "", RESULT_ERROR_COLUMN: ""}
@@ -156,14 +258,16 @@ class GeocodingClient:
 
         first = suggestions[0]
         details = first.get("data") or {}
-        return {
+        result = {
             RESULT_ADDRESS_COLUMN: first.get("unrestricted_value") or first.get("value") or "",
             RESULT_LAT_COLUMN: str(details.get("geo_lat") or ""),
             RESULT_LON_COLUMN: str(details.get("geo_lon") or ""),
             RESULT_ERROR_COLUMN: "",
         }
+        result.update(extract_geocoder_output_fields(details, selected_fields or []))
+        return result
 
-    def reverse_geocode(self, lat: Any, lon: Any) -> dict[str, str]:
+    def reverse_geocode(self, lat: Any, lon: Any, selected_fields: list[str] | None = None) -> dict[str, str]:
         lat_text = str(lat or "").strip().replace(",", ".")
         lon_text = str(lon or "").strip().replace(",", ".")
         if not lat_text or not lon_text:
@@ -175,12 +279,15 @@ class GeocodingClient:
             return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text, RESULT_ERROR_COLUMN: "Адрес не найден"}
 
         first = suggestions[0]
-        return {
+        details = first.get("data") or {}
+        result = {
             RESULT_ADDRESS_COLUMN: first.get("unrestricted_value") or first.get("value") or "",
             RESULT_LAT_COLUMN: lat_text,
             RESULT_LON_COLUMN: lon_text,
             RESULT_ERROR_COLUMN: "",
         }
+        result.update(extract_geocoder_output_fields(details, selected_fields or []))
+        return result
 
     def _post(self, url: str, request_payload: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
@@ -403,9 +510,25 @@ def write_excel(table: TableData, path: Path) -> None:
     workbook.save(path)
 
 
-def append_result_columns(table: TableData) -> TableData:
+def _format_geocoder_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def extract_geocoder_output_fields(details: dict[str, Any], selected_fields: list[str]) -> dict[str, str]:
+    return {
+        field: _format_geocoder_value(details.get(GEOCODER_OUTPUT_FIELD_KEYS[field]))
+        for field in selected_fields
+        if field in GEOCODER_OUTPUT_FIELD_KEYS
+    }
+
+
+def append_result_columns(table: TableData, selected_fields: list[str] | None = None) -> TableData:
     result = table.copy()
-    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN]:
+    for column in [RESULT_ADDRESS_COLUMN, RESULT_LAT_COLUMN, RESULT_LON_COLUMN, RESULT_ERROR_COLUMN, *(selected_fields or [])]:
         if column not in result.headers:
             result.headers.append(column)
     return result
@@ -416,13 +539,14 @@ def process_addresses(
     address_column: str,
     client: GeocodingClient,
     progress: Callable[[int, int, str], None] | None = None,
+    selected_fields: list[str] | None = None,
 ) -> TableData:
-    result = append_result_columns(table)
+    result = append_result_columns(table, selected_fields)
     total = len(result.rows)
     for index, row in enumerate(result.rows, start=1):
         source = str(row.get(address_column, ""))
         try:
-            row.update(client.geocode_address(source))
+            row.update(client.geocode_address(source, selected_fields))
         except GeocodingError as exc:
             row.update({
                 RESULT_ADDRESS_COLUMN: "",
@@ -441,14 +565,15 @@ def process_coordinates(
     lon_column: str,
     client: GeocodingClient,
     progress: Callable[[int, int, str], None] | None = None,
+    selected_fields: list[str] | None = None,
 ) -> TableData:
-    result = append_result_columns(table)
+    result = append_result_columns(table, selected_fields)
     total = len(result.rows)
     for index, row in enumerate(result.rows, start=1):
         lat = row.get(lat_column, "")
         lon = row.get(lon_column, "")
         try:
-            row.update(client.reverse_geocode(lat, lon))
+            row.update(client.reverse_geocode(lat, lon, selected_fields))
         except GeocodingError as exc:
             row.update({
                 RESULT_ADDRESS_COLUMN: "",
@@ -1135,10 +1260,10 @@ class CheckColumnDropdown(ttk.Frame):
         )
         self.dropdown.pack(fill="x", expand=True)
 
-    def set_columns(self, columns: list[str], *, enabled: bool = True) -> None:
+    def set_columns(self, columns: list[str], *, enabled: bool = True, selected_by_default: bool = True) -> None:
         self.columns = columns[:]
-        self.column_vars = {column: tk.BooleanVar(value=True) for column in self.columns}
-        self.all_var.set(True)
+        self.column_vars = {column: tk.BooleanVar(value=selected_by_default) for column in self.columns}
+        self.all_var.set(selected_by_default and bool(self.columns))
         self._set_enabled(enabled and bool(self.columns))
         self._refresh_text()
         self._rebuild_menu()
@@ -1205,7 +1330,7 @@ class CheckColumnDropdown(ttk.Frame):
     def _refresh_text(self) -> None:
         total = len(self.columns)
         if not total:
-            self.textvariable.set("Загрузите XLSX файл")
+            self.textvariable.set("Нет полей для выбора")
             return
         selected = total if self.all_var.get() else len(self.selected_columns())
         self.textvariable.set(f"Выбрано {selected} из {total}")
@@ -1220,6 +1345,7 @@ class GeocodeApp(tk.Tk):
         self.table_data: TableData | None = None
         self.result_data: TableData | None = None
         self.loaded_path: Path | None = None
+        self.selected_output_fields: list[str] = []
         self.worker_events: list[tuple[str, Any]] = []
         self.worker_lock = threading.Lock()
 
@@ -1227,6 +1353,7 @@ class GeocodeApp(tk.Tk):
         self.address_column = tk.StringVar()
         self.lat_column = tk.StringVar()
         self.lon_column = tk.StringVar()
+        self.output_fields_text = tk.StringVar(value="Выбрано 0 из 0")
         self.source_file = tk.StringVar()
         self.output_file = tk.StringVar()
         self.polygon_output_file = tk.StringVar()
@@ -1422,6 +1549,12 @@ class GeocodeApp(tk.Tk):
         self.lon_combo = ttk.Combobox(self.lon_wrap.content, textvariable=self.lon_column, state="readonly", width=24)
         self._block_widget_mousewheel(self.lon_combo)
         self.lon_combo.pack(fill="x", expand=True)
+
+        ttk.Label(settings, text="Поля в выходном файле", style="Card.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        self.output_fields_dropdown = CheckColumnDropdown(settings, self.output_fields_text)
+        self.output_fields_dropdown.grid(row=4, column=0, columnspan=3, sticky="we", pady=(2, 0))
+        self.output_fields_dropdown.set_columns([label for label, _key in GEOCODER_OUTPUT_FIELDS], selected_by_default=False)
+
         settings.columnconfigure(0, weight=2)
         settings.columnconfigure(1, weight=1)
         settings.columnconfigure(2, weight=1)
@@ -2010,6 +2143,7 @@ class GeocodeApp(tk.Tk):
             messagebox.showwarning("Нет пути сохранения", "Выберите путь для сохранения результата.")
             return
 
+        self.selected_output_fields = self.output_fields_dropdown.selected_columns()
         self.start_button.config(state="disabled")
         self.progress_label.configure(text="0%")
         self.progress.configure(maximum=max(len(self.table_data.rows), 1), value=0)
@@ -2041,10 +2175,11 @@ class GeocodeApp(tk.Tk):
             self._add_worker_event("progress", (current, total, label))
 
         try:
+            selected_fields = self.selected_output_fields[:]
             if self.mode.get() == "address_to_coords":
-                result = process_addresses(self.table_data, self.address_column.get(), client, progress)
+                result = process_addresses(self.table_data, self.address_column.get(), client, progress, selected_fields)
             else:
-                result = process_coordinates(self.table_data, self.lat_column.get(), self.lon_column.get(), client, progress)
+                result = process_coordinates(self.table_data, self.lat_column.get(), self.lon_column.get(), client, progress, selected_fields)
         except Exception as exc:
             self._add_worker_event("error", str(exc))
         else:
