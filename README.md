@@ -25,7 +25,7 @@ python -m pip install openpyxl
 
 ```bash
 python -m pip install --upgrade -r requirements-exe.txt
-pyinstaller --onefile --windowed --name GeocodeEXE --hidden-import=openpyxl geocode_exe.py
+pyinstaller --onefile --windowed --name GeocodeEXE --hidden-import=openpyxl geocode.py
 ```
 
 Готовый файл будет здесь:
