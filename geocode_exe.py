@@ -54,6 +54,7 @@ RESULT_ADDRESS_COLUMN = "Найденный адрес"
 RESULT_LAT_COLUMN = "Широта результата"
 RESULT_LON_COLUMN = "Долгота результата"
 RESULT_ERROR_COLUMN = "Ошибка геокодирования"
+INVALID_COORDINATES_ERROR_PREFIX = "Некорректные координаты"
 POLYGON_RESULT_COLUMN = "Внутри полигона"
 POLYGON_NAME_COLUMN = "Название полигона"
 POLYGON_ERROR_COLUMN = "Ошибка проверки полигона"
@@ -281,6 +282,15 @@ class GeocodingClient:
         if not lat_text or not lon_text:
             return {RESULT_ADDRESS_COLUMN: "", RESULT_LAT_COLUMN: lat_text, RESULT_LON_COLUMN: lon_text, RESULT_ERROR_COLUMN: ""}
 
+        coordinate_error = validate_coordinates(lat_text, lon_text)
+        if coordinate_error:
+            return {
+                RESULT_ADDRESS_COLUMN: "",
+                RESULT_LAT_COLUMN: lat_text,
+                RESULT_LON_COLUMN: lon_text,
+                RESULT_ERROR_COLUMN: coordinate_error,
+            }
+
         data = self._post(self.reverse_url, {"lat": lat_text, "lon": lon_text, "count": 1})
         suggestions = data.get("suggestions") or []
         if not suggestions:
@@ -343,6 +353,42 @@ class GeocodingClient:
         if not isinstance(parsed, dict):
             raise GeocodingError("Сервис вернул неожиданный формат ответа")
         return parsed
+
+
+def validate_coordinates(lat: Any, lon: Any) -> str:
+    lat_text = str(lat or "").strip().replace(",", ".")
+    lon_text = str(lon or "").strip().replace(",", ".")
+    if not lat_text or not lon_text:
+        return ""
+    try:
+        lat_value = float(lat_text)
+        lon_value = float(lon_text)
+    except ValueError:
+        return f"{INVALID_COORDINATES_ERROR_PREFIX}: широта и долгота должны быть числами"
+    if not math.isfinite(lat_value) or not math.isfinite(lon_value):
+        return f"{INVALID_COORDINATES_ERROR_PREFIX}: широта и долгота должны быть конечными числами"
+    if not -90 <= lat_value <= 90:
+        return f"{INVALID_COORDINATES_ERROR_PREFIX}: широта должна быть от -90 до 90"
+    if not -180 <= lon_value <= 180:
+        return f"{INVALID_COORDINATES_ERROR_PREFIX}: долгота должна быть от -180 до 180"
+    return ""
+
+
+def geocoding_error_row_numbers(table: TableData, first_data_row: int = 1) -> list[int]:
+    return [
+        first_data_row + index
+        for index, row in enumerate(table.rows)
+        if str(row.get(RESULT_ERROR_COLUMN, "")).strip()
+    ]
+
+
+def format_geocoding_error_summary(error_rows: list[int]) -> str:
+    if not error_rows:
+        return "Ошибок геокодирования нет"
+    rows = ", ".join(str(row) for row in error_rows[:50])
+    if len(error_rows) > 50:
+        rows += f" и ещё {len(error_rows) - 50}"
+    return f"Ошибки геокодирования в строках: {rows}"
 
 
 def _prepare_address_query(address: str) -> str:
@@ -2259,7 +2305,12 @@ class GeocodeApp(tk.Tk):
                 else:
                     self.progress.configure(value=self.progress.cget("maximum"))
                     self.progress_label.configure(text="100%")
-                    self.geocode_status.set(f"Готово. Файл сохранён: {output_path}")
+                    first_data_row = max(int(self.start_row.get()), 1) + (1 if self.has_header.get() else 0)
+                    error_rows = geocoding_error_row_numbers(self.result_data, first_data_row)
+                    error_summary = format_geocoding_error_summary(error_rows)
+                    self.geocode_status.set(f"Готово. Файл сохранён: {output_path}. {error_summary}")
+                    if error_rows:
+                        messagebox.showinfo("Геокодирование завершено с ошибками", error_summary)
             elif event == "s2_progress":
                 current, total, label = payload
                 self.polygon_progress.configure(maximum=max(total, 1), value=min(current, total))
